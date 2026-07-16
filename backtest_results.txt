@@ -1,0 +1,105 @@
+=================================================================
+FANTASY SIX PACK — MLB MODEL BACKTEST REPORT
+Generated: 2026-06-15 11:36
+Games analyzed: 1068
+=================================================================
+
+── OVERALL PROJECTION ACCURACY ──────────────────────────────────
+  Mean error (actual - proj):  +0.729 runs
+  Median error:                +0.150 runs
+  Std dev:                     4.438 runs
+  Mean absolute error (MAE):   3.510 runs
+  Pct within 2 runs:           35.3%
+  Pct within 3 runs:           51.3%
+
+  ⚠  SYSTEMATIC BIAS DETECTED: UNDER-projecting by 0.73 runs
+     Consider adjusting BASE_RUNS (currently 4.00)
+
+── ACCURACY BY PARK FACTOR BUCKET ───────────────────────────────
+  Bucket                       N   Mean Err  Std Dev
+  ----------------------------------------------------
+  100-104 (neutral)          398     +0.919    4.547
+  105-115 (hitter)           105     +0.832    4.400
+  116+ (extreme hitter)       34     +1.731    6.078
+  90-95 (pitcher)             38     -0.374    3.418
+  96-99 (slight pitcher)     493     +0.570    4.285
+
+── ACCURACY BY HOME TEAM (min 10 games) ─────────────────────────
+  Team                           Games   Mean Err    PF               Status
+  ---------------------------------------------------------------------------
+  Washington Nationals              35     +3.220   100        >>> REVIEW PF
+  Pittsburgh Pirates                39     +2.541    99        >>> REVIEW PF
+  Athletics                         34     +1.731   122        >>> REVIEW PF
+  Colorado Rockies                  34     +1.629   115        >>> REVIEW PF
+  Baltimore Orioles                 41     +1.423   101        >>> REVIEW PF
+  Houston Astros                    35     +1.323   103        >>> REVIEW PF
+  Minnesota Twins                   39     +1.230   100        >>> REVIEW PF
+  Tampa Bay Rays                    33     +0.991    99                Watch
+  New York Mets                     36     +0.990    98                Watch
+  New York Yankees                  31     +0.983   102                Watch
+  Texas Rangers                     31     -0.947    96                Watch
+  Kansas City Royals                38     +0.873   100                Watch
+  Arizona Diamondbacks              35     +0.864    96                Watch
+  San Francisco Giants              34     +0.826    96                Watch
+  Los Angeles Angels                37     +0.799    96                Watch
+  Toronto Blue Jays                 39     +0.794   100                Watch
+  Chicago White Sox                 36     +0.733    99                Watch
+  Boston Red Sox                    34     -0.722   102                Watch
+  St. Louis Cardinals               35     +0.676    98                Watch
+  Cincinnati Reds                   35     +0.513   108                  ~OK
+  Milwaukee Brewers                 37     +0.499   103                  ~OK
+  Atlanta Braves                    33     -0.464    99                  ~OK
+  Philadelphia Phillies             36     +0.389   107                  ~OK
+  Chicago Cubs                      35     +0.374   102                  ~OK
+  San Diego Padres                  38     -0.374    94                  ~OK
+  Detroit Tigers                    34     +0.356    96                  ~OK
+  Miami Marlins                     39     +0.224    97                  ~OK
+  Cleveland Guardians               36     -0.044    96                  ~OK
+  Seattle Mariners                  35     +0.036    96                  ~OK
+  Los Angeles Dodgers               34     -0.033   100                  ~OK
+
+  Mean Err > 0 = model under-projecting (raise park factor or BASE_RUNS)
+  Mean Err < 0 = model over-projecting (lower park factor or BASE_RUNS)
+
+── SIMULATED OVER/UNDER HIT RATES AT VARIOUS EDGES ─────────────
+  (Uses league-avg ERA projection vs actual total — shows if edges are predictive)
+      Edge Threshold  Over N  Over W  Over%   Under N Under W Under%
+  ----------------------------------------------------------------------
+        >= 0.50 runs     139      92  66.2%         0       0   0.0%
+        >= 0.75 runs     139      92  66.2%         0       0   0.0%
+        >= 1.00 runs      68      49  72.1%         0       0   0.0%
+        >= 1.25 runs      68      49  72.1%         0       0   0.0%
+        >= 1.50 runs      34      26  76.5%         0       0   0.0%
+        >= 1.75 runs      34      26  76.5%         0       0   0.0%
+        >= 2.00 runs       6       5  83.3%         0       0   0.0%
+
+── TOP 15 BIGGEST MISSES ────────────────────────────────────────
+        Date Away                      Home                        Proj  Actual   Error
+  -------------------------------------------------------------------------------------
+  2026-06-14 Colorado Rockies          Athletics                   11.4      32   +20.6
+  2026-06-08 Milwaukee Brewers         Athletics                   11.4      29   +17.6
+  2026-05-02 Cincinnati Reds           Pittsburgh Pirates           8.1      24   +15.9
+  2026-05-31 San Francisco Giants      Colorado Rockies             9.4      25   +15.6
+  2026-05-18 New York Mets             Washington Nationals         8.2      23   +14.8
+  2026-05-18 Baltimore Orioles         Tampa Bay Rays               8.1      22   +13.9
+  2026-04-01 Minnesota Twins           Kansas City Royals           8.2      22   +13.8
+  2026-06-10 Washington Nationals      San Francisco Giants         7.8      21   +13.2
+  2026-04-13 Washington Nationals      Pittsburgh Pirates           8.1      21   +12.9
+  2026-05-26 Colorado Rockies          Los Angeles Dodgers          8.2      21   +12.8
+  2026-04-13 Los Angeles Angels        New York Yankees             8.3      21   +12.7
+  2026-06-05 San Francisco Giants      Chicago Cubs                 8.3      21   +12.7
+  2026-06-04 San Francisco Giants      Milwaukee Brewers            8.4      21   +12.6
+  2026-05-19 Athletics                 Los Angeles Angels           7.8      20   +12.2
+  2026-04-05 Houston Astros            Athletics                   10.0      22   +12.0
+
+── MONTHLY ACCURACY TREND ───────────────────────────────────────
+     Month Games   Mean Err  Std Dev
+  --------------------------------------
+   2026-03    76     +0.427    4.509
+   2026-04   392     +0.878    4.489
+   2026-05   419     +0.383    4.314
+   2026-06   181     +1.337    4.531
+
+=================================================================
+END OF REPORT
+=================================================================

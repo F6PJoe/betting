@@ -1,0 +1,116 @@
+=== BET HISTORY DEEP DIVE ===
+Total graded bets: 48
+Overall: 25-21-2  +3.02u
+
+--- By Star Level ---
+  0-star: 24-18  57%  +3.82u  [O:5 U:38]
+  3-star: 0-2  0%  -0.70u  [O:1 U:1]
+  5-star: 1-1  50%  -0.10u  [O:2 U:1]
+
+--- By Direction ---
+  Over: 4-3  57%
+  Under: 6-7  46%
+
+--- By Date ---
+  2026-06-02: 1-4  -1.73u
+  2026-06-03: 5-0  +2.56u
+  2026-06-04: 2-1  +0.43u
+  2026-06-05: 3-3  +0.05u
+  2026-06-06: 4-3  +0.22u
+  2026-06-08: 1-3  -0.80u
+  2026-06-09: 2-0  +1.90u
+  2026-06-10: 3-0  +2.20u
+  2026-06-11: 1-2  -0.60u
+  2026-06-12: 0-4  -2.90u
+  2026-06-13: 3-1  +1.70u
+
+--- Projection Error Analysis ---
+  Mean error (actual - proj): +0.43 runs
+  Median error: -0.40 runs
+  Std dev: 4.91 runs
+  Over bets mean err: -2.30 (+ = game scored more than projected)
+  Under bets mean err: +2.71 (- = game scored less than projected)
+
+  All games edge vs result:
+    2026-06-04 San Francisco Giants @ Milwauk OVER 9 | proj:11.1 act:21.0 err:+9.9 edge:2.1 LOSS
+    2026-06-09 Cincinnati Reds @ San Diego Pa Over 7 | proj:8.8 act:8.0 err:-0.8 edge:1.85 WIN
+    2026-06-02 San Diego Padres @ Philadelphi OVER 8 | proj:9.8 act:5.0 err:-4.8 edge:1.82 LOSS
+    2026-06-08 Cincinnati Reds @ San Diego Pa Over 7.5 | proj:9.3 act:8.0 err:-1.3 edge:1.8 WIN
+    2026-06-02 Colorado Rockies @ Los Angeles OVER 8.5 | proj:10.2 act:10.0 err:-0.2 edge:1.7 LOSS
+    2026-06-13 San Diego Padres @ Baltimore O Over 10 | proj:11.7 act:12.0 err:+0.3 edge:1.67 WIN
+    2026-06-08 Houston Astros @ Los Angeles A Over 9 | proj:10.6 act:9.0 err:-1.6 edge:1.611 LOSS
+    2026-06-04 San Diego Padres @ Philadelphi OVER 8 | proj:9.6 act:10.0 err:+0.4 edge:1.6 LOSS
+    2026-06-11 Arizona Diamondbacks @ Miami M Over 8.5 | proj:10.1 act:2.0 err:-8.1 edge:1.58 LOSS
+    2026-06-03 Detroit Tigers @ Tampa Bay Ray OVER 8 | proj:9.6 act:9.0 err:-0.6 edge:1.58 LOSS
+    2026-06-05 Cincinnati Reds @ St. Louis Ca OVER 9 | proj:10.5 act:13.0 err:+2.5 edge:1.51 LOSS
+    2026-06-02 Athletics @ Chicago Cubs OVER 7.5 | proj:9.0 act:3.0 err:-6.0 edge:1.5 LOSS
+    2026-06-03 Toronto Blue Jays @ Atlanta Br OVER 8 | proj:9.4 act:10.0 err:+0.6 edge:1.39 LOSS
+    2026-06-02 Kansas City Royals @ Cincinnat OVER 9 | proj:10.3 act:7.0 err:-3.3 edge:1.28 LOSS
+    2026-06-12 Arizona Diamondbacks @ Cincinn Over 9.5 | proj:10.7 act:7.0 err:-3.7 edge:1.24 LOSS
+    2026-06-12 Miami Marlins @ Pittsburgh Pir Under 8.5 | proj:7.3 act:11.0 err:+3.7 edge:1.21 LOSS
+    2026-06-10 Philadelphia Phillies @ Toront Over 8.5 | proj:9.7 act:11.0 err:+1.3 edge:1.21 WIN
+    2026-06-05 New York Mets @ San Diego Padr OVER 7 | proj:8.2 act:5.0 err:-3.2 edge:1.16 LOSS
+    2026-06-06 Cleveland Guardians @ Texas Ra OVER 8 | proj:9.1 act:6.0 err:-3.1 edge:1.12 LOSS
+    2026-06-12 Seattle Mariners @ Washington  Under 9 | proj:8.0 act:12.0 err:+4.0 edge:1.04 LOSS
+    2026-06-05 Cleveland Guardians @ Texas Ra OVER 7.5 | proj:8.5 act:5.0 err:-3.5 edge:1.02 LOSS
+    2026-06-12 Atlanta Braves @ New York Mets Under 8 | proj:7.0 act:12.0 err:+5.0 edge:0.97 LOSS
+    2026-06-08 Boston Red Sox @ Tampa Bay Ray Over 7.5 | proj:8.5 act:4.0 err:-4.5 edge:0.958 LOSS
+    2026-06-06 Washington Nationals @ Arizona OVER 9 | proj:9.9 act:7.0 err:-2.9 edge:0.93 LOSS
+    2026-06-05 Washington Nationals @ Arizona OVER 9 | proj:9.9 act:15.0 err:+5.1 edge:0.91 LOSS
+    2026-06-06 Tampa Bay Rays @ Miami Marlins UNDER 8 | proj:7.2 act:7.0 err:-0.2 edge:-0.78 LOSS
+    2026-06-08 New York Yankees @ Cleveland G Under 8 | proj:7.2 act:12.0 err:+4.8 edge:-0.8 LOSS
+    2026-06-02 Miami Marlins @ Washington Nat UNDER 9 | proj:8.2 act:10.0 err:+1.8 edge:-0.83 LOSS
+    2026-06-03 Kansas City Royals @ Cincinnat UNDER 8.5 | proj:7.7 act:7.0 err:-0.7 edge:-0.84 LOSS
+    2026-06-06 Chicago White Sox @ Philadelph UNDER 10 | proj:9.2 act:9.0 err:-0.2 edge:-0.85 LOSS
+    2026-06-13 Houston Astros @ Kansas City R Under 9.5 | proj:8.4 act:15.0 err:+6.6 edge:-1.05 LOSS
+    2026-06-10 Houston Astros @ Los Angeles A Under 8.5 | proj:7.3 act:5.0 err:-2.3 edge:-1.22 WIN
+    2026-06-05 Tampa Bay Rays @ Miami Marlins UNDER 8 | proj:6.8 act:6.0 err:-0.8 edge:-1.23 LOSS
+    2026-06-03 Los Angeles Dodgers @ Arizona  UNDER 9 | proj:7.7 act:7.0 err:-0.7 edge:-1.27 LOSS
+    2026-06-06 Seattle Mariners @ Detroit Tig UNDER 8.5 | proj:7.2 act:4.0 err:-3.2 edge:-1.28 LOSS
+    2026-06-05 San Francisco Giants @ Chicago UNDER 11 | proj:9.7 act:21.0 err:+11.3 edge:-1.29 LOSS
+    2026-06-03 Miami Marlins @ Washington Nat UNDER 8.5 | proj:7.2 act:5.0 err:-2.2 edge:-1.3 LOSS
+    2026-06-10 Texas Rangers @ Kansas City Ro Under 10 | proj:8.6 act:10.0 err:+1.4 edge:-1.36 LOSS
+    2026-06-11 Minnesota Twins @ Detroit Tige Under 9.5 | proj:8.1 act:11.0 err:+2.9 edge:-1.41 LOSS
+    2026-06-13 New York Yankees @ Toronto Blu Under 8 | proj:6.5 act:4.0 err:-2.5 edge:-1.5 WIN
+    2026-06-13 Chicago Cubs @ San Francisco G Under 8 | proj:6.5 act:7.0 err:+0.5 edge:-1.5 WIN
+    2026-06-06 Pittsburgh Pirates @ Atlanta B UNDER 8.5 | proj:7.0 act:9.0 err:+2.0 edge:-1.52 LOSS
+    2026-06-06 San Francisco Giants @ Chicago UNDER 8.5 | proj:6.9 act:5.0 err:-1.9 edge:-1.61 LOSS
+    2026-06-11 Texas Rangers @ Kansas City Ro Under 10.5 | proj:8.7 act:6.0 err:-2.7 edge:-1.77 WIN
+    2026-06-10 Chicago Cubs @ Colorado Rockie Under 12.5 | proj:10.2 act:5.0 err:-5.2 edge:-2.28 WIN
+    2026-06-04 Athletics @ Chicago Cubs UNDER 10.5 | proj:8.2 act:13.0 err:+4.8 edge:-2.3 LOSS
+    2026-06-09 Texas Rangers @ Kansas City Ro Under 9.5 | proj:7.1 act:8.0 err:+0.9 edge:-2.38 WIN
+    2026-06-08 Milwaukee Brewers @ Athletics Under 11 | proj:8.1 act:29.0 err:+20.9 edge:-2.881 LOSS
+
+--- Big Misses (|actual-proj| > 4 runs) ---
+  2026-06-08 Milwaukee Brewers @ Athletics Under | proj:8.1 act:29.0 err:+20.9 | 5*
+  2026-06-05 San Francisco Giants @ Chicago Cubs UNDER | proj:9.7 act:21.0 err:+11.3 | 0*
+  2026-06-04 San Francisco Giants @ Milwaukee Brewers OVER | proj:11.1 act:21.0 err:+9.9 | 0*
+  2026-06-11 Arizona Diamondbacks @ Miami Marlins Over | proj:10.1 act:2.0 err:-8.1 | 0*
+  2026-06-13 Houston Astros @ Kansas City Royals Under | proj:8.4 act:15.0 err:+6.6 | 0*
+  2026-06-02 Athletics @ Chicago Cubs OVER | proj:9.0 act:3.0 err:-6.0 | 0*
+  2026-06-10 Chicago Cubs @ Colorado Rockies Under | proj:10.2 act:5.0 err:-5.2 | 0*
+  2026-06-05 Washington Nationals @ Arizona Diamondbacks OVER | proj:9.9 act:15.0 err:+5.1 | 0*
+  2026-06-12 Atlanta Braves @ New York Mets Under | proj:7.0 act:12.0 err:+5.0 | 0*
+  2026-06-02 San Diego Padres @ Philadelphia Phillies OVER | proj:9.8 act:5.0 err:-4.8 | 0*
+  2026-06-04 Athletics @ Chicago Cubs UNDER | proj:8.2 act:13.0 err:+4.8 | 0*
+  2026-06-08 New York Yankees @ Cleveland Guardians Under | proj:7.2 act:12.0 err:+4.8 | 3*
+  2026-06-08 Boston Red Sox @ Tampa Bay Rays Over | proj:8.5 act:4.0 err:-4.5 | 3*
+  2026-06-12 Seattle Mariners @ Washington Nationals Under | proj:8.0 act:12.0 err:+4.0 | 0*
+
+=== ML RL SHADOW DEEP DIVE ===
+Total shadow rows: 49
+Graded shadow rows: 0
+
+--- Shadow by Bet Type ---
+  Moneyline: 0-0  0%  +0.00u
+  Run Line: 0-0  0%  +0.00u
+
+--- Shadow by Stars ---
+
+--- Shadow by Date ---
+
+--- Shadow Favorite vs Underdog ---
+  Fav: 0-0  0%  +0.00u
+  Dog: 0-0  0%  +0.00u
+
+--- All Graded Shadow Rows ---

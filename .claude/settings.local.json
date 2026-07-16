@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(mkdir -p \"C:\\\\Users\\\\corpo\\\\.claude\\\\projects\\\\C--Users-corpo-Betting-Models\\\\memory\" 2>/dev/null; echo done)",
+      "PowerShell(python --version 2>&1)",
+      "Bash(del \"C:\\\\Users\\\\corpo\\\\Betting Models\\\\debug_venue.py\")",
+      "Bash(python grade_bets.py)",
+      "Bash(python fetch_odds.py)",
+      "Bash(python analyze_edges.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -)",
+      "Bash(python fetch_closing_lines.py)",
+      "Bash('C:\\\\Users\\\\corpo\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\python.exe' -c ' *)",
+      "Bash(\"C:\\\\Users\\\\corpo\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\python.exe\" grade_bets.py)",
+      "Bash(\"C:\\\\Users\\\\corpo\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\python.exe\" fetch_odds.py)",
+      "Bash(\"C:\\\\Users\\\\corpo\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\python.exe\" analyze_edges.py)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; cd \"C:\\\\Users\\\\corpo\\\\Betting Models\"; python analyze_edges.py --force 2>&1)"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+# Credentials — never commit these
+google_credentials.json
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

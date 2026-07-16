@@ -1,0 +1,188 @@
+{
+  "Oracle Park": {
+    "team": "San Francisco Giants",
+    "games_at_calibration": 29,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 96
+  },
+  "Citi Field": {
+    "team": "New York Mets",
+    "games_at_calibration": 30,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 98
+  },
+  "American Family Field": {
+    "team": "Milwaukee Brewers",
+    "games_at_calibration": 34,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 103
+  },
+  "Wrigley Field": {
+    "team": "Chicago Cubs",
+    "games_at_calibration": 35,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 102
+  },
+  "Oriole Park at Camden Yards": {
+    "team": "Baltimore Orioles",
+    "games_at_calibration": 35,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 101
+  },
+  "Great American Ball Park": {
+    "team": "Cincinnati Reds",
+    "games_at_calibration": 32,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 108
+  },
+  "Daikin Park": {
+    "team": "Houston Astros",
+    "games_at_calibration": 35,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 103
+  },
+  "Petco Park": {
+    "team": "San Diego Padres",
+    "games_at_calibration": 36,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 94
+  },
+  "Busch Stadium": {
+    "team": "St. Louis Cardinals",
+    "games_at_calibration": 35,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 98
+  },
+  "Citizens Bank Park": {
+    "team": "Philadelphia Phillies",
+    "games_at_calibration": 36,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 107
+  },
+  "UNIQLO Field at Dodger Stadium": {
+    "team": "Los Angeles Dodgers",
+    "games_at_calibration": 34,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 100
+  },
+  "T-Mobile Park": {
+    "team": "Seattle Mariners",
+    "games_at_calibration": 35,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 96
+  },
+  "Rogers Centre": {
+    "team": "Toronto Blue Jays",
+    "games_at_calibration": 34,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 100
+  },
+  "loanDepot park": {
+    "team": "Miami Marlins",
+    "games_at_calibration": 36,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 97
+  },
+  "Truist Park": {
+    "team": "Atlanta Braves",
+    "games_at_calibration": 33,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 99
+  },
+  "Kauffman Stadium": {
+    "team": "Kansas City Royals",
+    "games_at_calibration": 32,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 100
+  },
+  "Chase Field": {
+    "team": "Arizona Diamondbacks",
+    "games_at_calibration": 33,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 96
+  },
+  "Nationals Park": {
+    "team": "Washington Nationals",
+    "games_at_calibration": 32,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 100
+  },
+  "Comerica Park": {
+    "team": "Detroit Tigers",
+    "games_at_calibration": 31,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 96
+  },
+  "Yankee Stadium": {
+    "team": "New York Yankees",
+    "games_at_calibration": 31,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 102
+  },
+  "Fenway Park": {
+    "team": "Boston Red Sox",
+    "games_at_calibration": 31,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 102
+  },
+  "Rate Field": {
+    "team": "Chicago White Sox",
+    "games_at_calibration": 31,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 99
+  },
+  "Globe Life Field": {
+    "team": "Texas Rangers",
+    "games_at_calibration": 31,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 96
+  },
+  "Progressive Field": {
+    "team": "Cleveland Guardians",
+    "games_at_calibration": 32,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 96
+  },
+  "Target Field": {
+    "team": "Minnesota Twins",
+    "games_at_calibration": 36,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 100
+  },
+  "Coors Field": {
+    "team": "Colorado Rockies",
+    "games_at_calibration": 31,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 115
+  },
+  "PNC Park": {
+    "team": "Pittsburgh Pirates",
+    "games_at_calibration": 33,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 99
+  },
+  "Angel Stadium": {
+    "team": "Los Angeles Angels",
+    "games_at_calibration": 32,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 96
+  },
+  "Sutter Health Park": {
+    "team": "Athletics",
+    "games_at_calibration": 28,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 122
+  },
+  "Tropicana Field": {
+    "team": "Tampa Bay Rays",
+    "games_at_calibration": 31,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 99
+  },
+  "Las Vegas Ballpark": {
+    "team": "Athletics",
+    "games_at_calibration": 1,
+    "last_calibration_date": "2026-06-09",
+    "factor_at_calibration": 140
+  }
+}
