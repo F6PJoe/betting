@@ -29,11 +29,20 @@ jobs:
       - name: Grade yesterday's bets
         run: python grade_bets.py
 
+      - name: Pause
+        run: sleep 30
+
       - name: Fetch today's odds
         run: python fetch_odds.py
 
+      - name: Pause
+        run: sleep 30
+
       - name: Analyze edges
         run: python analyze_edges.py
+
+      - name: Pause
+        run: sleep 30
 
       - name: Write to sheets
         run: python write_sheets.py
