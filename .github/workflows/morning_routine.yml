@@ -24,9 +24,7 @@ jobs:
         run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google_credentials.json
 
       - name: Create .env file
-        run: |
-          echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
-          echo "ODDS_API_KEY_NFL=${{ secrets.ODDS_API_KEY_NFL }}" >> .env
+        run: echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
 
       - name: Grade yesterday's bets
         run: python grade_bets.py
