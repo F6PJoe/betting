@@ -1,0 +1,41 @@
+name: MLB Morning Routine
+
+on:
+  workflow_dispatch:  # allows triggering via HTTP (cron-jobs.org)
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install gspread google-auth requests python-dotenv
+
+      - name: Write Google credentials
+        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google_credentials.json
+
+      - name: Create .env file
+        run: |
+          echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
+          echo "ODDS_API_KEY_NFL=${{ secrets.ODDS_API_KEY_NFL }}" >> .env
+
+      - name: Grade yesterday's bets
+        run: python grade_bets.py
+
+      - name: Fetch today's odds
+        run: python fetch_odds.py
+
+      - name: Analyze edges
+        run: python analyze_edges.py
+
+      - name: Write to sheets
+        run: python write_sheets.py
