@@ -83,7 +83,7 @@ def odds_to_num(s):
     """Convert odds string like '+114' or '-120' to int for tracker column F.
     Column F formulas (H, K, M) require a numeric value to detect negative odds correctly."""
     try:
-        return int(str(s).replace('+', '').strip())
+        return int(str(s).replace("'", "").replace('+', '').strip())
     except (ValueError, TypeError):
         return s
 
