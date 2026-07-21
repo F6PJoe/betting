@@ -2548,9 +2548,10 @@ def main():
     print(f"  {len(shadow_rows)} ML/RL shadow rows")
     print(f"  {len(gt_shadow_rows)} game total shadow rows")
 
-    # ── Sort edges by Stars (numeric) high to low ────────────────────────────
+    # ── Sort edges by Stars (numeric) high to low, then units high to low ───
     stars_col = EDGES_HEADER.index("Stars2")
-    edge_rows.sort(key=lambda r: r[stars_col], reverse=True)
+    units_col = EDGES_HEADER.index("Units")
+    edge_rows.sort(key=lambda r: (r[stars_col], r[units_col]), reverse=True)
 
     # ── Write Edges tab — data rows only (row 1 headers are never touched) ───
     ws_edges = ws(gc, ODDS_SHEET_ID, "Edges")
