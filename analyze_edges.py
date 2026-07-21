@@ -1995,7 +1995,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Game Total", direction,
-                        f"{direction} {t_line}", stars_emoji(stars), units,
+                        f"{abbrev(away)}@{abbrev(home)} {'o' if direction == 'Over' else 'u'}{t_line}", stars_emoji(stars), units,
                         t_line, fmt_juice(juice), proj_total, round(edge, 2), "",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
