@@ -1653,7 +1653,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
         line  = bl["line"]
         price = bl["price"]
         book  = bl["book"]
-        game_label = f"{away} @ {home}"
+        game_label = f"{abbrev(away)} @ {abbrev(home)}"
 
         # Find game for park factor
         g = game_by_teams.get((home, away), {})
@@ -1887,7 +1887,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
         time_et = ct.astimezone(timezone(timedelta(hours=-5))).strftime("%-I:%M %p") \
                   if sys.platform != "win32" else \
                   ct.astimezone(timezone(timedelta(hours=-5))).strftime("%#I:%M %p")
-        game_label = f"{away} @ {home}"
+        game_label = f"{abbrev(away)} @ {abbrev(home)}"
 
         venue = game.get("venue", "")
         venue_lower = venue.lower()
@@ -2123,7 +2123,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Moneyline", side,
-                        bet_team, stars_emoji(stars), units,
+                        abbrev(bet_team), stars_emoji(stars), units,
                         "", fmt_juice(price), proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2176,7 +2176,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Run Line", side,
-                        f"{bet_team} {spread:+.1f}", stars_emoji(stars), units,
+                        f"{abbrev(bet_team)} {spread:+.1f}", stars_emoji(stars), units,
                         spread, fmt_juice(price), proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2354,6 +2354,23 @@ def _shadow_row(
         f"{conf_pct}%",
         run_now,
     ]
+
+
+MLB_ABBREV = {
+    "Arizona Diamondbacks": "ARI", "Atlanta Braves": "ATL", "Baltimore Orioles": "BAL",
+    "Boston Red Sox": "BOS", "Chicago Cubs": "CHC", "Chicago White Sox": "CWS",
+    "Cincinnati Reds": "CIN", "Cleveland Guardians": "CLE", "Colorado Rockies": "COL",
+    "Detroit Tigers": "DET", "Houston Astros": "HOU", "Kansas City Royals": "KC",
+    "Los Angeles Angels": "LAA", "Los Angeles Dodgers": "LAD", "Miami Marlins": "MIA",
+    "Milwaukee Brewers": "MIL", "Minnesota Twins": "MIN", "New York Mets": "NYM",
+    "New York Yankees": "NYY", "Athletics": "OAK", "Philadelphia Phillies": "PHI",
+    "Pittsburgh Pirates": "PIT", "San Diego Padres": "SD", "San Francisco Giants": "SF",
+    "Seattle Mariners": "SEA", "St. Louis Cardinals": "STL", "Tampa Bay Rays": "TB",
+    "Texas Rangers": "TEX", "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
+}
+
+def abbrev(team: str) -> str:
+    return MLB_ABBREV.get(team, team)
 
 
 def fmt_juice(price) -> str:
