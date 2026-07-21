@@ -1996,7 +1996,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     edge_row = [
                         game_label, time_et, book.title(), "Game Total", direction,
                         f"{direction} {t_line}", stars_emoji(stars), units,
-                        t_line, juice, proj_total, round(edge, 2), "",
+                        t_line, fmt_juice(juice), proj_total, round(edge, 2), "",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
                         f"{proj['home_win']*100:.1f}%", f"{proj['away_win']*100:.1f}%",
@@ -2124,7 +2124,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     edge_row = [
                         game_label, time_et, book.title(), "Moneyline", side,
                         bet_team, stars_emoji(stars), units,
-                        "", price, proj_total,
+                        "", fmt_juice(price), proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
@@ -2177,7 +2177,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     edge_row = [
                         game_label, time_et, book.title(), "Run Line", side,
                         f"{bet_team} {spread:+.1f}", stars_emoji(stars), units,
-                        spread, price, proj_total,
+                        spread, fmt_juice(price), proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
@@ -2354,6 +2354,14 @@ def _shadow_row(
         f"{conf_pct}%",
         run_now,
     ]
+
+
+def fmt_juice(price) -> str:
+    """Format odds with visible apostrophe prefix so TablePress reads them as text."""
+    if price is None or price == "":
+        return ""
+    n = int(price)
+    return f"''+{n}" if n > 0 else f"''{n}"
 
 
 # ── Sheet writers ─────────────────────────────────────────────────────────────
