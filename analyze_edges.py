@@ -1804,7 +1804,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
         else:
             conf_label = "High" if stars == 5 else "Medium" if stars == 4 else "Standard"
             conf_pct = None
-        conf_pct_str = f"{conf_pct}%" if conf_pct is not None else conf_label
+        conf_pct_str = f"{round(conf_pct)}%" if conf_pct is not None else conf_label
         if prop_type == "Team Total":
             # Skip bets with juice worse than -199 — not worth the risk/reward
             if price is not None and price <= -200:
@@ -2023,7 +2023,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
                         f"{proj['home_win']*100:.1f}%", f"{proj['away_win']*100:.1f}%",
-                        conf, f"{conf_pct}%", run_now,
+                        conf, f"{round(conf_pct)}%", run_now,
                     ]
                     edge_rows.append(edge_row)
 
@@ -2152,7 +2152,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
                         f"{proj['home_win']*100:.1f}%", f"{proj['away_win']*100:.1f}%",
-                        conf, f"{conf_pct}%", run_now,
+                        conf, f"{round(conf_pct)}%", run_now,
                     ]
                     edge_rows.append(edge_row)
 
@@ -2205,7 +2205,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
                         f"{proj['home_win']*100:.1f}%", f"{proj['away_win']*100:.1f}%",
-                        conf, f"{conf_pct}%", run_now,
+                        conf, f"{round(conf_pct)}%", run_now,
                     ]
                     edge_rows.append(edge_row)
 
