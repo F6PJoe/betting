@@ -2701,6 +2701,22 @@ def main():
     print(f"  {len(tt_rows)} team total(s) + {len(prop_shadow_rows)} player prop(s) found")
     edge_rows.extend(tt_edge_rows)
 
+    # ── Deduplicate: best book per (Game, Bet Type, Direction) ───────────────
+    def _parse_juice(s):
+        try:
+            return int(str(s).replace("'", "").replace("+", "").strip())
+        except (ValueError, TypeError):
+            return -999
+
+    juice_col = EDGES_HEADER.index("Book Juice")
+    best_per_bet: dict = {}
+    for row in edge_rows:
+        key = (row[0], row[3], row[4])  # Game, Bet Type, Direction
+        j = _parse_juice(row[juice_col])
+        if key not in best_per_bet or j > best_per_bet[key][0]:
+            best_per_bet[key] = (j, row)
+    edge_rows = [v[1] for v in best_per_bet.values()]
+
     # ── Sort + write Edges tab (after TT rows added) ─────────────────────────
     stars_col = EDGES_HEADER.index("Stars")
     units_col = EDGES_HEADER.index("Units")
