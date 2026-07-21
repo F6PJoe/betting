@@ -1995,7 +1995,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Game Total", direction,
-                        f"{direction} {t_line}", stars_emoji(stars), stars, units,
+                        f"{direction} {t_line}", stars_emoji(stars), stars,
                         t_line, juice, proj_total, round(edge, 2), "",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
@@ -2123,7 +2123,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Moneyline", side,
-                        bet_team, stars_emoji(stars), stars, units,
+                        bet_team, stars_emoji(stars), stars,
                         "", price, proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2176,7 +2176,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Run Line", side,
-                        f"{bet_team} {spread:+.1f}", stars_emoji(stars), stars, units,
+                        f"{bet_team} {spread:+.1f}", stars_emoji(stars), stars,
                         spread, price, proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2359,10 +2359,10 @@ def _shadow_row(
 # ── Sheet writers ─────────────────────────────────────────────────────────────
 EDGES_HEADER = [
     "Game", "Time (ET)", "Book", "Bet Type", "Direction", "Bet On",
-    "Stars", "Stars (#)", "Units", "Book Line", "Book Juice", "Our Projection",
-    "Edge (runs)", "Edge %", "Away SP", "Away ERA Est",
+    "Stars", "Stars2", "Book Line", "Book Juice", "Our Projection",
+    "Edge (runs)", "Edge pct", "Away SP", "Away ERA Est",
     "Home SP", "Home ERA Est", "Proj Away Runs", "Proj Home Runs",
-    "Park Factor", "Home Win%", "Away Win%", "Confidence", "Confidence %", "Run at",
+    "Park Factor", "Home Win pct", "Away Win pct", "Confidence", "Confidence pct", "Run at",
 ]
 
 HISTORY_HEADER = [
@@ -2548,14 +2548,17 @@ def main():
     print(f"  {len(shadow_rows)} ML/RL shadow rows")
     print(f"  {len(gt_shadow_rows)} game total shadow rows")
 
-    # ── Sort edges by units high to low ──────────────────────────────────────
-    units_col = EDGES_HEADER.index("Units")
-    edge_rows.sort(key=lambda r: r[units_col], reverse=True)
+    # ── Sort edges by Stars (numeric) high to low ────────────────────────────
+    stars_col = EDGES_HEADER.index("Stars2")
+    edge_rows.sort(key=lambda r: r[stars_col], reverse=True)
 
-    # ── Write Edges tab (today only — cleared and rewritten each run) ─────────
+    # ── Write Edges tab — data rows only (row 1 headers are never touched) ───
     ws_edges = ws(gc, ODDS_SHEET_ID, "Edges")
-    ws_edges.clear()
-    ws_edges.format("A1:Z2000", {
+    # Clear data rows only (row 2 onward), never row 1
+    last_row = ws_edges.row_count
+    if last_row >= 2:
+        ws_edges.batch_clear([f"A2:Z{last_row}"])
+    ws_edges.format("A2:Z2000", {
         "numberFormat": {"type": "NUMBER", "pattern": "0.##"},
         "borders": {
             "top":    {"style": "NONE"},
@@ -2564,7 +2567,8 @@ def main():
             "right":  {"style": "NONE"},
         }
     })
-    ws_edges.update([EDGES_HEADER] + edge_rows, value_input_option="USER_ENTERED")
+    if edge_rows:
+        ws_edges.update(edge_rows, range_name="A2", value_input_option="USER_ENTERED")
     print(f"\nWrote {len(edge_rows)} rows to 'Edges' tab")
 
     # ── Snapshot to Bet History (first run of day only — newest date at top) ───
