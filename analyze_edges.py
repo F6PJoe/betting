@@ -1884,9 +1884,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
         home = game["home_team"]
         away = game["away_team"]
         ct   = game["commence_time"]
-        time_et = ct.astimezone(timezone(timedelta(hours=-5))).strftime("%-I:%M %p ET") \
+        time_et = ct.astimezone(timezone(timedelta(hours=-5))).strftime("%-I:%M %p") \
                   if sys.platform != "win32" else \
-                  ct.astimezone(timezone(timedelta(hours=-5))).strftime("%#I:%M %p ET")
+                  ct.astimezone(timezone(timedelta(hours=-5))).strftime("%#I:%M %p")
         game_label = f"{away} @ {home}"
 
         venue = game.get("venue", "")
@@ -1995,7 +1995,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Game Total", direction,
-                        f"{direction} {t_line}", stars_emoji(stars), stars, units,
+                        f"{direction} {t_line}", stars_emoji(stars), units,
                         t_line, juice, proj_total, round(edge, 2), "",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
@@ -2123,7 +2123,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Moneyline", side,
-                        bet_team, stars_emoji(stars), stars, units,
+                        bet_team, stars_emoji(stars), units,
                         "", price, proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2176,7 +2176,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Run Line", side,
-                        f"{bet_team} {spread:+.1f}", stars_emoji(stars), stars, units,
+                        f"{bet_team} {spread:+.1f}", stars_emoji(stars), units,
                         spread, price, proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2359,7 +2359,7 @@ def _shadow_row(
 # ── Sheet writers ─────────────────────────────────────────────────────────────
 EDGES_HEADER = [
     "Game", "Time (ET)", "Book", "Bet Type", "Direction", "Bet On",
-    "Stars", "Stars2", "Units", "Book Line", "Book Juice", "Our Projection",
+    "Stars", "Units", "Book Line", "Book Juice", "Our Projection",
     "Edge (runs)", "Edge pct", "Away SP", "Away ERA Est",
     "Home SP", "Home ERA Est", "Proj Away Runs", "Proj Home Runs",
     "Park Factor", "Home Win pct", "Away Win pct", "Confidence", "Confidence pct", "Run at",
@@ -2548,10 +2548,10 @@ def main():
     print(f"  {len(shadow_rows)} ML/RL shadow rows")
     print(f"  {len(gt_shadow_rows)} game total shadow rows")
 
-    # ── Sort edges by Stars (numeric) high to low, then units high to low ───
-    stars_col = EDGES_HEADER.index("Stars2")
+    # ── Sort edges: stars (emoji length) high to low, then units high to low ─
+    stars_col = EDGES_HEADER.index("Stars")
     units_col = EDGES_HEADER.index("Units")
-    edge_rows.sort(key=lambda r: (r[stars_col], r[units_col]), reverse=True)
+    edge_rows.sort(key=lambda r: (len(r[stars_col]), r[units_col]), reverse=True)
 
     # ── Write Edges tab — data rows only (row 1 headers are never touched) ───
     ws_edges = ws(gc, ODDS_SHEET_ID, "Edges")
