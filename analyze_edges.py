@@ -1642,6 +1642,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                                "home": home, "away": away}
 
     tt_rows     = []   # Team Totals — own tab
+    tt_edge_rows = []  # Team Totals — Edges tab rows
     prop_rows   = []   # Player Props (SP K, TB, HR, H+R+RBI)
     hr_bets_out = 0
     max_hr      = max(1, len(games) // HR_GAMES_RATIO)
@@ -1818,6 +1819,28 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                 "", "", "", "Pending", "",
                 run_now,
             ])
+            # Team Total → also add to Edges tab
+            g_data = game_by_teams.get((home, away), {})
+            ct = g_data.get("commence_time")
+            if ct:
+                from datetime import timezone, timedelta
+                time_et = ct.astimezone(timezone(timedelta(hours=-5))).strftime("%-I:%M %p") \
+                          if sys.platform != "win32" else \
+                          ct.astimezone(timezone(timedelta(hours=-5))).strftime("%#I:%M %p")
+            else:
+                time_et = ""
+            ou = "o" if direction == "Over" else "u"
+            bet_on = f"{abbrev(player)} {ou}{line}"
+            gp = game_projections.get((home, away), {})
+            tt_edge_rows.append([
+                game_label, time_et, book.title(), "TT", direction,
+                bet_on, stars_emoji(stars), units,
+                line, fmt_juice(price), round(proj, 2),
+                "", f"{round(edge_pct, 2)}%",
+                "", "", "", "",
+                gp.get("proj_away", ""), gp.get("proj_home", ""),
+                park_factor, "", "", conf_label, conf_pct_str, run_now,
+            ])
         else:
             prop_rows.append([
                 today, game_label, player, prop_type, direction,
@@ -1840,7 +1863,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
     sort_key = lambda r: (r[11], r[8])  # units col=11, edge col=8
     tt_rows.sort(key=sort_key, reverse=True)
     prop_rows.sort(key=lambda r: (r[11], float(str(r[9]).replace("%","")) if r[9] else 0), reverse=True)  # units col=11, edge% col=9
-    return tt_rows, prop_rows
+    return tt_rows, tt_edge_rows, prop_rows
 
 
 # ── Edge analysis ─────────────────────────────────────────────────────────────
@@ -1994,7 +2017,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     conf_pct = confidence_percentile(edge_pct_of_line, historical_edges["Game Total"])
 
                     edge_row = [
-                        game_label, time_et, book.title(), "Game Total", direction,
+                        game_label, time_et, book.title(), "GT", direction,
                         f"{abbrev(away)}@{abbrev(home)} {'o' if direction == 'Over' else 'u'}{t_line}", stars_emoji(stars), units,
                         t_line, fmt_juice(juice), proj_total, round(edge, 2), "",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2122,7 +2145,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     raw_win = proj["home_win_raw"] if side == "Home" else (1 - proj["home_win_raw"])
 
                     edge_row = [
-                        game_label, time_et, book.title(), "Moneyline", side,
+                        game_label, time_et, book.title(), "ML", side,
                         abbrev(bet_team), stars_emoji(stars), units,
                         "", fmt_juice(price), proj_total,
                         "", f"{round(edge_pct, 2)}%",
@@ -2175,7 +2198,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     raw_win  = proj["home_win_raw"] if side == "Home" else (1 - proj["home_win_raw"])
 
                     edge_row = [
-                        game_label, time_et, book.title(), "Run Line", side,
+                        game_label, time_et, book.title(), "RL", side,
                         f"{abbrev(bet_team)} {spread:+.1f}", stars_emoji(stars), units,
                         spread, fmt_juice(price), proj_total,
                         "", f"{round(edge_pct, 2)}%",
@@ -2573,29 +2596,7 @@ def main():
     print(f"  {len(shadow_rows)} ML/RL shadow rows")
     print(f"  {len(gt_shadow_rows)} game total shadow rows")
 
-    # ── Sort edges: stars (emoji length) high to low, then units high to low ─
-    stars_col = EDGES_HEADER.index("Stars")
-    units_col = EDGES_HEADER.index("Units")
-    edge_rows.sort(key=lambda r: (len(r[stars_col]), r[units_col]), reverse=True)
-
-    # ── Write Edges tab — data rows only (row 1 headers are never touched) ───
-    ws_edges = ws(gc, ODDS_SHEET_ID, "Edges")
-    # Clear data rows only (row 2 onward), never row 1
-    last_row = ws_edges.row_count
-    if last_row >= 2:
-        ws_edges.batch_clear([f"A2:Z{last_row}"])
-    ws_edges.format("A2:Z2000", {
-        "numberFormat": {"type": "NUMBER", "pattern": "0.##"},
-        "borders": {
-            "top":    {"style": "NONE"},
-            "bottom": {"style": "NONE"},
-            "left":   {"style": "NONE"},
-            "right":  {"style": "NONE"},
-        }
-    })
-    if edge_rows:
-        ws_edges.update(edge_rows, range_name="A2", value_input_option="USER_ENTERED")
-    print(f"\nWrote {len(edge_rows)} rows to 'Edges' tab")
+    # Edges tab write deferred until after team totals are added (see below)
 
     # ── Snapshot to Bet History (first run of day only — newest date at top) ───
     today = datetime.now().strftime("%Y-%m-%d")
@@ -2693,11 +2694,29 @@ def main():
 
     # ── Player Props analysis and snapshot ───────────────────────────────────
     print("\nRunning player props analysis ...")
-    tt_rows, prop_shadow_rows = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
-                                              sp_opp_stats=sp_opp_stats,
-                                              game_projections=game_projections,
-                                              historical_edges=historical_edges)
+    tt_rows, tt_edge_rows, prop_shadow_rows = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
+                                                            sp_opp_stats=sp_opp_stats,
+                                                            game_projections=game_projections,
+                                                            historical_edges=historical_edges)
     print(f"  {len(tt_rows)} team total(s) + {len(prop_shadow_rows)} player prop(s) found")
+    edge_rows.extend(tt_edge_rows)
+
+    # ── Sort + write Edges tab (after TT rows added) ─────────────────────────
+    stars_col = EDGES_HEADER.index("Stars")
+    units_col = EDGES_HEADER.index("Units")
+    edge_rows.sort(key=lambda r: (len(r[stars_col]), r[units_col]), reverse=True)
+    ws_edges = ws(gc, ODDS_SHEET_ID, "Edges")
+    last_row = ws_edges.row_count
+    if last_row >= 2:
+        ws_edges.batch_clear([f"A2:Z{last_row}"])
+    ws_edges.format("A2:Z2000", {
+        "numberFormat": {"type": "NUMBER", "pattern": "0.##"},
+        "borders": {"top": {"style": "NONE"}, "bottom": {"style": "NONE"},
+                    "left": {"style": "NONE"}, "right": {"style": "NONE"}},
+    })
+    if edge_rows:
+        ws_edges.update(edge_rows, range_name="A2", value_input_option="USER_ENTERED")
+    print(f"\nWrote {len(edge_rows)} rows to 'Edges' tab")
 
     ws_tt = ws(gc, ODDS_SHEET_ID, "Team Totals")
     if tt_rows:
