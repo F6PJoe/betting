@@ -2361,7 +2361,7 @@ def fmt_juice(price) -> str:
     if price is None or price == "":
         return ""
     n = int(price)
-    return f"''+{n}" if n > 0 else f"''{n}"
+    return f"'+{n}" if n > 0 else f"'{n}"
 
 
 # ── Sheet writers ─────────────────────────────────────────────────────────────
