@@ -1995,7 +1995,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Game Total", direction,
-                        f"{direction} {t_line}", stars_emoji(stars), units,
+                        f"{direction} {t_line}", stars_emoji(stars), stars, units,
                         t_line, juice, proj_total, round(edge, 2), "",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
                         proj["proj_away"], proj["proj_home"], park_factor,
@@ -2123,7 +2123,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Moneyline", side,
-                        bet_team, stars_emoji(stars), units,
+                        bet_team, stars_emoji(stars), stars, units,
                         "", price, proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2176,7 +2176,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                     edge_row = [
                         game_label, time_et, book.title(), "Run Line", side,
-                        f"{bet_team} {spread:+.1f}", stars_emoji(stars), units,
+                        f"{bet_team} {spread:+.1f}", stars_emoji(stars), stars, units,
                         spread, price, proj_total,
                         "", f"{round(edge_pct, 2)}%",
                         away_sp, round(away_era, 3), home_sp, round(home_era, 3),
@@ -2359,7 +2359,7 @@ def _shadow_row(
 # ── Sheet writers ─────────────────────────────────────────────────────────────
 EDGES_HEADER = [
     "Game", "Time (ET)", "Book", "Bet Type", "Direction", "Bet On",
-    "Stars", "Units", "Book Line", "Book Juice", "Our Projection",
+    "Stars", "Stars (#)", "Units", "Book Line", "Book Juice", "Our Projection",
     "Edge (runs)", "Edge %", "Away SP", "Away ERA Est",
     "Home SP", "Home ERA Est", "Proj Away Runs", "Proj Home Runs",
     "Park Factor", "Home Win%", "Away Win%", "Confidence", "Confidence %", "Run at",
