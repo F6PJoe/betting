@@ -7,6 +7,8 @@ finds edges vs. book lines, writes to Edges / Bet History / Moneyline & Run Line
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
+EASTERN = ZoneInfo("America/New_York")
 import math
 import os
 import sys
@@ -1823,10 +1825,9 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             g_data = game_by_teams.get((home, away), {})
             ct = g_data.get("commence_time")
             if ct:
-                from datetime import timezone, timedelta
-                time_et = ct.astimezone(timezone(timedelta(hours=-5))).strftime("%-I:%M %p") \
+                time_et = ct.astimezone(EASTERN).strftime("%-I:%M %p") \
                           if sys.platform != "win32" else \
-                          ct.astimezone(timezone(timedelta(hours=-5))).strftime("%#I:%M %p")
+                          ct.astimezone(EASTERN).strftime("%#I:%M %p")
             else:
                 time_et = ""
             ou = "o" if direction == "Over" else "u"
@@ -1907,9 +1908,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
         home = game["home_team"]
         away = game["away_team"]
         ct   = game["commence_time"]
-        time_et = ct.astimezone(timezone(timedelta(hours=-5))).strftime("%-I:%M %p") \
+        time_et = ct.astimezone(EASTERN).strftime("%-I:%M %p") \
                   if sys.platform != "win32" else \
-                  ct.astimezone(timezone(timedelta(hours=-5))).strftime("%#I:%M %p")
+                  ct.astimezone(EASTERN).strftime("%#I:%M %p")
         game_label = f"{abbrev(away)} @ {abbrev(home)}"
 
         venue = game.get("venue", "")
