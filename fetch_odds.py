@@ -13,7 +13,18 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # ── Config ────────────────────────────────────────────────────────────────────
-ODDS_API_KEY   = os.environ["ODDS_API_KEY"]
+ODDS_API_KEY   = os.environ.get("ODDS_API_KEY", "")
+if not ODDS_API_KEY:
+    raise EnvironmentError("ODDS_API_KEY not set — check .env file in Betting Models folder")
+
+LOG_FILE = os.path.join(os.path.dirname(__file__), "run_log.txt")
+_log_fh  = None
+
+def log(msg: str):
+    print(msg)
+    if _log_fh:
+        _log_fh.write(msg + "\n")
+        _log_fh.flush()
 ODDS_SHEET_ID  = "1RaSm1ogJtNykM7WbYfQ3b9L7MUePcRBqlFMKuQfA_I4"
 CREDS_FILE     = os.path.join(os.path.dirname(__file__), "google_credentials.json")
 
@@ -47,23 +58,31 @@ def get_sheet(sheet_id: str, tab_name: str):
 def fetch_market(markets: str) -> tuple[list[dict], dict]:
     """Return (games_json, headers_dict) for one markets= request."""
     params = {**COMMON_PARAMS, "markets": markets}
-    resp   = requests.get(BASE_URL, params=params, timeout=30)
-    if resp.status_code == 422:
-        print(f"  [skip] {markets} returned 422 — endpoint unavailable on free plan")
+    try:
+        resp = requests.get(BASE_URL, params=params, timeout=30)
+        if resp.status_code == 422:
+            log(f"  [skip] {markets} returned 422 — endpoint unavailable on free plan")
+            return [], {}
+        resp.raise_for_status()
+        return resp.json(), resp.headers
+    except Exception as e:
+        log(f"  [ERROR] fetch_market({markets}) failed: {e}")
         return [], {}
-    resp.raise_for_status()
-    return resp.json(), resp.headers
 
 
 def fetch_event_props(event_id: str, markets: str) -> tuple[dict, dict]:
     """Fetch per-event odds for the given markets. Returns (event_json, headers)."""
     url    = EVENT_URL.format(event_id=event_id)
     params = {**COMMON_PARAMS, "markets": markets}
-    resp   = requests.get(url, params=params, timeout=30)
-    if resp.status_code in (404, 422):
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        if resp.status_code in (404, 422):
+            return {}, {}
+        resp.raise_for_status()
+        return resp.json(), resp.headers
+    except Exception as e:
+        log(f"  [ERROR] fetch_event_props({event_id}) failed: {e}")
         return {}, {}
-    resp.raise_for_status()
-    return resp.json(), resp.headers
 
 
 def parse_games(games: list[dict]) -> list[list]:
@@ -124,17 +143,20 @@ def parse_prop_rows(event: dict) -> list[list]:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    print("=" * 60)
-    print("fetch_odds.py — Fantasy Six Pack MLB Odds Fetcher")
-    print(f"Run time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
+    global _log_fh
+    run_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _log_fh = open(LOG_FILE, "a", encoding="utf-8")
+    log("")
+    log("=" * 60)
+    log(f"fetch_odds.py run at {run_ts}")
+    log("=" * 60)
 
     all_rows   = []
     last_hdrs  = {}
     all_games  = []  # keep raw game list to extract event IDs for props
 
     for markets in ["h2h,spreads,totals", "alternate_totals"]:
-        print(f"\nFetching markets={markets} ...")
+        log(f"\nFetching markets={markets} ...")
         games, hdrs = fetch_market(markets)
         if games:
             parsed = parse_games(games)
@@ -142,7 +164,7 @@ def main():
             last_hdrs = hdrs
             if not all_games:
                 all_games = games  # save first batch for event IDs
-            print(f"  {len(games)} games -> {len(parsed)} rows parsed")
+            log(f"  {len(games)} games -> {len(parsed)} rows parsed")
 
     # ── Fetch per-event odds (team totals always; player props only when enabled) ─
     # Done BEFORE the Sheets write so we can merge everything into one tab write
@@ -154,7 +176,7 @@ def main():
     if FETCH_PLAYER_PROPS:
         markets_to_fetch += ",pitcher_strikeouts,batter_total_bases,batter_home_runs,batter_hits_runs_rbis"
 
-    print(f"\nFetching per-event odds ({markets_to_fetch}) ...")
+    log(f"\nFetching per-event odds ({markets_to_fetch}) ...")
     for game in all_games:
         commence_raw = game.get("commence_time", "")
         try:
@@ -172,13 +194,13 @@ def main():
             last_hdrs = hdrs
             home = game.get("home_team", "")
             away = game.get("away_team", "")
-            print(f"  {away} @ {home}: {len(rows)} rows")
+            log(f"  {away} @ {home}: {len(rows)} rows")
 
     if skipped:
-        print(f"  Skipped {skipped} game(s) already in progress")
+        log(f"  Skipped {skipped} game(s) already in progress")
 
     # ── Write everything to a single MLB Odds tab ─────────────────────────────
-    print("\nConnecting to Google Sheets ...")
+    log("\nConnecting to Google Sheets ...")
     ws_odds = get_sheet(ODDS_SHEET_ID, "MLB Odds")
 
     game_header = [
@@ -186,16 +208,25 @@ def main():
         "sportsbook", "market_key", "name", "price", "point", "last_updated",
         "player", "direction",
     ]
-    ws_odds.clear()
-    ws_odds.update([game_header] + all_rows + prop_rows, value_input_option="USER_ENTERED")
-    print(f"  Wrote {len(all_rows)} game rows + {len(prop_rows)} prop rows to 'MLB Odds' tab")
 
+    total_rows = len(all_rows) + len(prop_rows)
+    if total_rows == 0:
+        log("  [WARNING] No rows fetched from API — sheet NOT cleared to preserve existing data")
+    else:
+        try:
+            ws_odds.clear()
+            ws_odds.update([game_header] + all_rows + prop_rows, value_input_option="USER_ENTERED")
+            log(f"  Wrote {len(all_rows)} game rows + {len(prop_rows)} prop rows to 'MLB Odds' tab")
+        except Exception as e:
+            log(f"  [ERROR] Sheet write failed: {e} — existing data preserved (clear may have already run)")
 
     # ── API credit report ─────────────────────────────────────────────────────
     used      = last_hdrs.get("x-requests-used", "?")
     remaining = last_hdrs.get("x-requests-remaining", "?")
-    print(f"\nAPI credits used: {used}  |  remaining: {remaining}")
-    print("\nDone.")
+    log(f"\nAPI credits used: {used}  |  remaining: {remaining}")
+    log("\nDone.")
+    if _log_fh:
+        _log_fh.close()
 
 
 if __name__ == "__main__":

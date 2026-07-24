@@ -12,7 +12,17 @@ EASTERN = ZoneInfo("America/New_York")
 import math
 import os
 import sys
+import traceback
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_log.txt")
+_log_fh  = None
+
+def log(msg: str):
+    print(msg)
+    if _log_fh:
+        _log_fh.write(msg + "\n")
+        _log_fh.flush()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ODDS_SHEET_ID  = "1RaSm1ogJtNykM7WbYfQ3b9L7MUePcRBqlFMKuQfA_I4"
@@ -3059,4 +3069,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import traceback as _tb
+    _log_fh_outer = open(LOG_FILE, "a", encoding="utf-8")
+    _log_fh_outer.write(f"\n{'='*60}\nanalyze_edges.py run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*60}\n")
+    _log_fh_outer.flush()
+    globals()["_log_fh"] = _log_fh_outer
+    try:
+        main()
+        _log_fh_outer.write("analyze_edges.py: completed successfully\n")
+    except Exception as _e:
+        _msg = f"[FATAL] analyze_edges.py crashed: {_e}\n{_tb.format_exc()}"
+        print(_msg)
+        _log_fh_outer.write(_msg + "\n")
+    finally:
+        _log_fh_outer.close()

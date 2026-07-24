@@ -293,8 +293,11 @@ def grade_history(ws_hist, scores: dict, yesterday: str) -> int:
 
         if bet_type == "Moneyline":
             bet_on_team = bet_on.replace(" ML", "").strip()
-            win  = (bet_on_team == game_home and home_s > away_s) or \
-                   (bet_on_team == game_away and away_s > home_s)
+            # expand abbreviations so "COL" and "Colorado Rockies" both match
+            game_home_full = TEAM_ABBREV.get(game_home.upper(), game_home)
+            game_away_full = TEAM_ABBREV.get(game_away.upper(), game_away)
+            win  = (bet_on_team in (game_home, game_home_full) and home_s > away_s) or \
+                   (bet_on_team in (game_away, game_away_full) and away_s > home_s)
             push = away_s == home_s
         elif bet_type == "Run Line":
             try:
