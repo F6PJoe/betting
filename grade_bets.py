@@ -9,6 +9,17 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta, timezone
 import os
 import time
+import sys
+
+LOG_FILE = os.path.join(os.path.dirname(__file__), "run_log.txt")
+_log_fh  = None
+
+def log(msg: str):
+    """Print to stdout and append to run_log.txt."""
+    print(msg)
+    if _log_fh:
+        _log_fh.write(msg + "\n")
+        _log_fh.flush()
 
 
 # ── Rate-limit retry wrapper ──────────────────────────────────────────────────
@@ -80,9 +91,13 @@ def fetch_scores(date_str: str) -> dict:
     date_str format: YYYY-MM-DD
     """
     params = {"sportId": 1, "date": date_str, "gameType": "R"}
-    resp   = requests.get(MLB_STATS_BASE, params=params, timeout=30)
-    resp.raise_for_status()
-    data   = resp.json()
+    try:
+        resp = requests.get(MLB_STATS_BASE, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"  [ERROR] fetch_scores failed: {e}")
+        return {}
 
     scores = {}
     for date_block in data.get("dates", []):
@@ -117,9 +132,13 @@ def fetch_player_stats(date_str: str) -> dict:
     """
     # First get game PKs for the date
     params = {"sportId": 1, "date": date_str, "gameType": "R"}
-    resp   = requests.get(MLB_STATS_BASE, params=params, timeout=30)
-    resp.raise_for_status()
-    data   = resp.json()
+    try:
+        resp = requests.get(MLB_STATS_BASE, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"  [ERROR] fetch_player_stats failed: {e}")
+        return {}
 
     game_pks = []
     for date_block in data.get("dates", []):
@@ -273,8 +292,9 @@ def grade_history(ws_hist, scores: dict, yesterday: str) -> int:
             continue
 
         if bet_type == "Moneyline":
-            win  = (bet_on == game_home and home_s > away_s) or \
-                   (bet_on == game_away and away_s > home_s)
+            bet_on_team = bet_on.replace(" ML", "").strip()
+            win  = (bet_on_team == game_home and home_s > away_s) or \
+                   (bet_on_team == game_away and away_s > home_s)
             push = away_s == home_s
         elif bet_type == "Run Line":
             try:
@@ -1153,20 +1173,29 @@ def grade_props(ws_props, scores: dict, player_stats: dict, yesterday: str) -> i
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    global _log_fh
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    print("=" * 60)
-    print("grade_bets.py — Fantasy Six Pack Bet Grader")
-    print(f"Grading date: {yesterday}")
-    print("=" * 60)
+    run_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    print("\nFetching MLB scores from Stats API ...")
+    _log_fh = open(LOG_FILE, "a", encoding="utf-8")
+    log("")
+    log("=" * 60)
+    log(f"grade_bets.py run at {run_ts}")
+    log(f"Grading date: {yesterday}")
+    log("=" * 60)
+
+    errors = []
+
+    log("\nFetching MLB scores from Stats API ...")
     scores = fetch_scores(yesterday)
-    print(f"  {len(scores)} completed games found")
+    log(f"  {len(scores)} completed games found")
+    if not scores:
+        errors.append("fetch_scores returned 0 games — API may be down or no games yesterday")
 
-    print("\nConnecting to Google Sheets ...")
+    log("\nConnecting to Google Sheets ...")
     gc = auth()
 
-    print("\nGrading Bet History ...")
+    log("\nGrading Bet History ...")
     ws_hist = get_ws(gc, "Bet History")
 
     # Migration: ensure all data rows in Bet History use the current column format
@@ -1203,67 +1232,84 @@ def main():
             print(f"  [migrated {count_old} old rows to current column format]")
 
     graded_hist, hist_updates, hist_header, hist_rows = grade_history(ws_hist, scores, yesterday)
-    print(f"  {graded_hist} bets graded")
+    log(f"  {graded_hist} bets graded")
+    if graded_hist == 0 and scores:
+        errors.append("Bet History: 0 bets graded despite having scores — check Pending rows")
     if graded_hist > 0:
         # Re-read so results summary has the freshly-written scores/results
         _fresh = ws_hist.get_all_values()
         hist_header = _fresh[0]
         hist_rows   = _fresh[1:]
 
-    print("\nGrading ML RL Shadow ...")
+    log("\nGrading ML RL Shadow ...")
     ws_shadow = get_ws(gc, "ML RL")
     graded_shadow, avg_err = grade_shadow(ws_shadow, scores, yesterday)
-    print(f"  {graded_shadow} shadow rows graded")
+    log(f"  {graded_shadow} shadow rows graded")
     if graded_shadow > 0:
-        print(f"  Average prediction error (ML/RL): {avg_err:.4f}")
-        print(f"  (0 = perfect, 1 = worst — lower is better calibration)")
+        log(f"  Average prediction error (ML/RL): {avg_err:.4f}")
 
-    print("\nGrading Game Total Shadow ...")
+    log("\nGrading Game Total Shadow ...")
     ws_gt_shadow = get_ws(gc, "Game Totals")
     graded_gt = grade_gt_shadow(ws_gt_shadow, scores, yesterday)
-    print(f"  {graded_gt} game total shadow rows graded")
+    log(f"  {graded_gt} game total shadow rows graded")
 
-    print("\nGrading Team Totals ...")
+    log("\nGrading Team Totals ...")
+    graded_tt = 0
     try:
         ws_tt = get_ws(gc, "Team Totals")
         graded_tt = grade_team_totals(ws_tt, scores, yesterday)
-        print(f"  {graded_tt} team total rows graded")
+        log(f"  {graded_tt} team total rows graded")
     except Exception as e:
-        print(f"  [Team Totals tab not found — will be created by analyze_edges.py]")
+        log(f"  [Team Totals tab not found — will be created by analyze_edges.py]")
 
-    print("\nGrading Player Props Shadow ...")
+    log("\nGrading Player Props Shadow ...")
+    graded_props = 0
     try:
         ws_props = get_ws(gc, "Player Props Shadow")
-        print("  Fetching per-player box score stats ...")
+        log("  Fetching per-player box score stats ...")
         player_stats = fetch_player_stats(yesterday)
-        print(f"  {len(player_stats)} player stat lines loaded")
+        log(f"  {len(player_stats)} player stat lines loaded")
         graded_props = grade_props(ws_props, scores, player_stats, yesterday)
-        print(f"  {graded_props} prop rows graded")
+        log(f"  {graded_props} prop rows graded")
     except Exception as e:
-        print(f"  [Player Props Shadow tab not found or error: {e}]")
+        log(f"  [Player Props Shadow: {e}]")
+        errors.append(f"Player Props Shadow error: {e}")
 
-    print("\nRebuilding Performance tab ...")
-    rebuild_performance(gc)
+    log("\nRebuilding Performance tab ...")
+    try:
+        rebuild_performance(gc)
+    except Exception as e:
+        log(f"  [ERROR] rebuild_performance failed: {e}")
+        errors.append(f"rebuild_performance failed: {e}")
 
-    print("\nVenue calibration report ...")
-    venue_calibration_report(ws_hist)
+    log("\nVenue calibration report ...")
+    try:
+        venue_calibration_report(ws_hist)
+    except Exception as e:
+        log(f"  [venue calibration error: {e}]")
 
-    print("\nRunning park factor tracker ...")
-    from build_park_factor_data import daily_check
-    daily_check(gc=gc, verbose=True)
+    log("\nRunning park factor tracker ...")
+    try:
+        from build_park_factor_data import daily_check
+        daily_check(gc=gc, verbose=True)
+    except Exception as e:
+        log(f"  [park factor tracker error: {e}]")
 
-    print("\nChecking edge calibration thresholds (Moneyline, Run Line, Game Total tracked separately) ...")
-    check_edge_calibration(gc, ws_shadow, "Moneyline", "Moneyline Edge Calibration")
-    check_edge_calibration(gc, ws_shadow, "Run Line", "Run Line Edge Calibration")
-    check_edge_calibration(gc, ws_gt_shadow, "Game Total", "Game Total Edge Calibration",
-                            edge_col="Edge % of Line", filter_by_bet_type=False)
+    log("\nChecking edge calibration thresholds ...")
+    try:
+        check_edge_calibration(gc, ws_shadow, "Moneyline", "Moneyline Edge Calibration")
+        check_edge_calibration(gc, ws_shadow, "Run Line", "Run Line Edge Calibration")
+        check_edge_calibration(gc, ws_gt_shadow, "Game Total", "Game Total Edge Calibration",
+                                edge_col="Edge % of Line", filter_by_bet_type=False)
+    except Exception as e:
+        log(f"  [edge calibration error: {e}]")
 
-    print("\nChecking Team Total star-tier calibration ...")
+    log("\nChecking Team Total star-tier calibration ...")
     try:
         ws_tt = get_ws(gc, "Team Totals")
         check_team_total_star_calibration(gc, ws_tt)
     except Exception as e:
-        print(f"  [Team Totals tab not found — skipping star calibration check]")
+        log(f"  [Team Totals calibration skipped: {e}]")
 
     # ── Previous day results summary (read graded rows from sheet) ───────────
     # Use the canonical Python constant (not the sheet header) because the sheet
@@ -1378,7 +1424,26 @@ def main():
     except Exception as e:
         print(f"\n[Player Props summary skipped: {e}]")
 
-    print("\nDone.")
+    log("\nDone.")
+
+    # ── Write run summary to log ──────────────────────────────────────────────
+    log("")
+    log("── RUN SUMMARY ──────────────────────────────────────────────")
+    log(f"  Scores fetched:       {len(scores)} games")
+    log(f"  Bet History graded:   {graded_hist}")
+    log(f"  ML/RL shadow graded:  {graded_shadow}")
+    log(f"  GT shadow graded:     {graded_gt}")
+    log(f"  Team Totals graded:   {graded_tt}")
+    log(f"  Player Props graded:  {graded_props}")
+    if errors:
+        log(f"  WARNINGS ({len(errors)}):")
+        for err in errors:
+            log(f"    - {err}")
+    else:
+        log("  Status: ALL OK")
+    log("─────────────────────────────────────────────────────────────")
+    if _log_fh:
+        _log_fh.close()
 
 
 # ── Proactive calibration checks ───────────────────────────────────────────────
