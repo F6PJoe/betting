@@ -990,9 +990,11 @@ PROPS_HRR_SCALE = [
     (15.0, 0.7), (19.0, 0.8), (23.0, 0.9), (28.0, 1.0),
 ]
 TEAM_TOTAL_SCALE = [
-    # Team Totals: lines typically 2.0-3.5. Similar variance to game totals halved.
-    (5.0, 0.3), (8.0, 0.4), (11.0, 0.5), (13.0, 0.6),
-    (16.0, 0.7), (19.0, 0.8), (22.0, 0.9), (25.0, 1.0),
+    # 3-star: 8-16% | 4-star: 16-30% | 5-star: 30-50% | hard cap at 50%
+    # Calibrated 2026-07-22 against 279 graded bets.
+    (8.0,  0.3), (12.0, 0.4),               # 3-star (TT tab only)
+    (16.0, 0.5), (22.0, 0.6),               # 4-star (Edges + Bet History)
+    (30.0, 0.7), (36.0, 0.8), (42.0, 0.9), (48.0, 1.0),  # 5-star
 ]
 # HR props: capped at 4 stars, max 0.2u regardless of edge, max 1 per 4 games
 HR_MAX_UNITS  = 0.2
@@ -1003,7 +1005,7 @@ HR_GAMES_RATIO = 4  # 1 HR bet allowed per this many games on slate
 LEAGUE_AVG_K_PCT        = 0.224   # MLB-wide K% per batter faced (~22.4%, 2024-25 avg)
 LEAGUE_AVG_BATTERS_PER_IP = 4.30  # average BF/IP across MLB starters
 EXPECTED_SP_IP          = 5.5     # expected innings for a typical SP start
-EXPECTED_PA_PER_GAME    = 4.0     # average plate appearances per batter per game
+EXPECTED_PA_PER_GAME    = 3.5     # avg PA/game; reduced from 4.0 — corrects H+R+RBI over-projection bias (+0.27u avg)
 PA_TO_AB_RATIO          = 0.865   # AB/PA league average (excludes BB, HBP, SAC)
 LEAGUE_AVG_BARREL_PCT   = 8.5     # MLB-wide barrel rate %
 LEAGUE_AVG_ISO          = 0.165   # MLB-wide ISO (SLG - AVG)
@@ -1033,15 +1035,86 @@ def poisson_cdf(k: int, lam: float) -> float:
 
 def prop_win_prob(proj: float, line: float, direction: str) -> float:
     """
-    True win probability for a discrete prop (H+R+RBI, Total Bases) modeled as Poisson.
+    True win probability for a discrete prop (H+R+RBI) modeled as Poisson.
     For Over line 1.5 → need X >= 2 → P(X >= 2) = 1 - P(X <= 1).
     For Under line 1.5 → need X <= 1 → P(X <= 1).
+    Note: Total Bases uses tb_game_win_prob() (convolution model) instead.
     """
     k_floor = int(line)  # floor: for line=1.5 → k=1
     if direction == "Over":
         return 1.0 - poisson_cdf(k_floor, proj)
     else:
         return poisson_cdf(k_floor, proj)
+
+
+_TB_PA_TO_AB      = 0.88   # typical AB/PA ratio (walks, HBP ~12%)
+_TB_TRIPLE_PER_PA = 0.003  # league-average triples per PA
+
+
+def _tb_pa_pmf(xba: float, xslg: float, hr_per_pa: float) -> list[float]:
+    """
+    Per-PA categorical PMF [p0, p1, p2, p3, p4] for TB outcomes (0–4 per PA).
+    Derived from xBA (hit rate) and xSLG (TB rate) with a fixed league-average triple rate.
+    2B rate is inferred from ISO; singles fill the remainder.
+    """
+    hit_per_pa    = xba  * _TB_PA_TO_AB
+    tb_per_pa     = xslg * _TB_PA_TO_AB
+    iso_per_pa    = max(0.0, tb_per_pa - hit_per_pa)
+    double_per_pa = max(0.0, iso_per_pa - 2 * _TB_TRIPLE_PER_PA - 3 * hr_per_pa)
+    single_per_pa = max(0.0, hit_per_pa - hr_per_pa - _TB_TRIPLE_PER_PA - double_per_pa)
+    zero_per_pa   = max(0.0, 1.0 - single_per_pa - double_per_pa - _TB_TRIPLE_PER_PA - hr_per_pa)
+    probs = [zero_per_pa, single_per_pa, double_per_pa, _TB_TRIPLE_PER_PA, hr_per_pa]
+    total = sum(probs)
+    return [p / total for p in probs] if total > 0 else [1.0, 0.0, 0.0, 0.0, 0.0]
+
+
+def _convolve_pa(pmf: list[float], n: int) -> list[float]:
+    """Convolve per-PA PMF n times to get the n-PA game TB distribution."""
+    max_tb  = n * (len(pmf) - 1)
+    game    = [0.0] * (max_tb + 1)
+    game[0] = 1.0
+    for _ in range(n):
+        new = [0.0] * (max_tb + 1)
+        for cur, pc in enumerate(game):
+            if pc == 0.0:
+                continue
+            for delta, pd in enumerate(pmf):
+                nv = cur + delta
+                if nv <= max_tb:
+                    new[nv] += pc * pd
+        game = new
+    return game
+
+
+def tb_game_win_prob(xba: float, xslg: float, hr_per_pa: float,
+                     line: float, direction: str,
+                     n_pa: float = EXPECTED_PA_PER_GAME) -> float:
+    """
+    Win probability for a Total Bases prop using a convolution model.
+    Each PA is modeled as a categorical draw (0/1/2/3/4 TB); the game
+    distribution is the n_pa-fold convolution of that per-PA PMF.
+    Handles fractional n_pa by blending floor/ceil results.
+
+    Replaces Poisson (prop_win_prob) for TB — Poisson is wrong here because
+    TB per game is a sum of discrete per-PA outcomes, not independent rare events.
+    Calibration 2026-07-22: old Poisson generated phantom 20-55% edges that
+    lost badly; convolution compresses edges to realistic values (~0-8%).
+    """
+    pmf    = _tb_pa_pmf(xba, xslg, hr_per_pa)
+    n_lo   = int(n_pa)
+    n_hi   = n_lo + 1
+    frac   = n_pa - n_lo
+    g_lo   = _convolve_pa(pmf, n_lo)
+    g_hi   = _convolve_pa(pmf, n_hi)
+    max_len = max(len(g_lo), len(g_hi))
+    g_lo  += [0.0] * (max_len - len(g_lo))
+    g_hi  += [0.0] * (max_len - len(g_hi))
+    game_pmf = [(1 - frac) * a + frac * b for a, b in zip(g_lo, g_hi)]
+    line_int = int(line)
+    if direction == "Over":
+        return sum(game_pmf[line_int + 1:])
+    else:
+        return sum(game_pmf[:line_int + 1])
 
 def stars_emoji(n: int) -> str:
     return "⭐" * n
@@ -1643,9 +1716,10 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             best_line[key] = {"line": line, "price": price, "book": book,
                                "home": home, "away": away}
 
-    tt_rows     = []   # Team Totals — own tab
-    tt_edge_rows = []  # Team Totals — Edges tab rows
-    prop_rows   = []   # Player Props (SP K, TB, HR, H+R+RBI)
+    tt_rows             = []   # Team Totals — own tab
+    tt_rows_for_history = []   # Team Totals — Bet History rows (4+ star only)
+    tt_edge_rows        = []   # Team Totals — Edges tab rows
+    prop_rows           = []   # Player Props (SP K, TB, HR, H+R+RBI)
     hr_bets_out = 0
     max_hr      = max(1, len(games) // HR_GAMES_RATIO)
     hrr_bets_out = 0
@@ -1687,7 +1761,10 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             implied = american_to_implied(price)
             our_prob = prop_win_prob(proj, line, direction)
             edge_pct = (our_prob - implied) / implied * 100 if implied > 0 else 0
-            if edge_pct < 4.0:
+            # Calibrated caps: Over 25%+ loses badly (6W/16L, 27.3%); Under 20%+ breaks even at best
+            if direction == "Over"  and not (4.0 <= edge_pct <= 25.0):
+                continue
+            if direction == "Under" and not (4.0 <= edge_pct <= 20.0):
                 continue
             units = unit_scale(edge_pct, PROPS_K_SCALE)
             stars = stars_from_units(units)
@@ -1702,23 +1779,47 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             # book prices them at -120 when there's real doubt. Skip to avoid that noise.
             if line is None or line < 1.0:
                 continue
-            pf = PARK_FACTORS.get(home, 100)
-            proj = project_batter_tb(b, pf)
-            if proj is None:
+            xba  = b.get("xba") or b.get("avg")
+            xslg = b.get("xslg") or b.get("slg")
+            pa   = b.get("pa")
+            hr   = b.get("hr")
+            if xba is None or xslg is None or pa is None or pa < 100 or hr is None:
                 continue
-            # Adjust projection for opposing pitcher quality (ERA vs league average).
-            # Calibration 2026-07-12: ignoring pitcher context was the primary source of
-            # false Over edges on 1.5 lines; elite starters reduce expected TB by up to 20%.
+            hr_per_pa = hr / pa
+            # Pitcher adjustment: elite starters suppress batter TB by up to 20%.
             pitcher_adj = _pitcher_batter_adj(pitchers, b.get("team", ""), home, away)
-            proj = proj * pitcher_adj
-            implied = american_to_implied(price)
-            our_prob = prop_win_prob(proj, line, direction)
+            adj_xba  = xba  * pitcher_adj
+            adj_xslg = xslg * pitcher_adj
+            # Park factor: scale xSLG only (TB is less park-sensitive than HR).
+            pf       = PARK_FACTORS.get(home, 100)
+            pf_adj   = 1.0 + (pf - 100) / 100.0 * 0.20
+            adj_xslg = adj_xslg * pf_adj
+            implied  = american_to_implied(price)
+            # Convolution model: each PA is a categorical draw (0-4 TB); convolve
+            # across expected PA per game. Replaces Poisson — calibration 2026-07-22
+            # showed Poisson generated phantom 20-55% edges that lost badly.
+            our_prob = tb_game_win_prob(adj_xba, adj_xslg, hr_per_pa, line, direction)
             edge_pct = (our_prob - implied) / implied * 100 if implied > 0 else 0
+            # Under: shadow-only until sufficient data confirms a profitable threshold.
+            # Keep computing and grading to accumulate calibration data.
+            if direction == "Under":
+                proj = adj_xslg * EXPECTED_PA_PER_GAME  # store expected TB for shadow
+                prop_rows.append([
+                    today, game_label, player, "Total Bases", direction,
+                    book.title(), line, price, round(proj, 2),
+                    f"{round(edge_pct, 2)}%",
+                    "—", 0,
+                    f"{round(our_prob * 100, 1)}%",
+                    "", "", "",
+                    run_now,
+                ])
+                continue
             if edge_pct < 4.0:
                 continue
             units = unit_scale(edge_pct, PROPS_TB_SCALE)
             stars = stars_from_units(units)
             prop_type = "Total Bases"
+            proj = adj_xslg * EXPECTED_PA_PER_GAME
 
         # ── Batter Home Runs (shadow-only — market too efficient to bet) ────
         elif market == "batter_home_runs":
@@ -1764,7 +1865,13 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             implied = american_to_implied(price)
             our_prob = prop_win_prob(proj, line, direction)
             edge_pct = (our_prob - implied) / implied * 100 if implied > 0 else 0
-            if edge_pct < 4.0:
+            # Calibrated caps (766 bets):
+            # Over: Poisson model underestimates zero-heavy distribution → cap at 12%.
+            #   4-12%: 61W/48L (56.0%, +4.98u). Above 12%: 247W/284L (46.5%, -42.22u).
+            # Under: 15%+ edge only: 36W/25L (59.0%, +3.03u). Below 15%: 49.2%, -4.62u.
+            if direction == "Over"  and not (4.0 <= edge_pct <= 12.0):
+                continue
+            if direction == "Under" and edge_pct < 15.0:
                 continue
             units = unit_scale(edge_pct, PROPS_HRR_SCALE)
             stars = stars_from_units(units)
@@ -1785,7 +1892,9 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             edge_pct = (proj - line) / line * 100 if line else 0
             if direction == "Under":
                 edge_pct = -edge_pct
-            if edge_pct < 4.0:
+            if edge_pct < 8.0:
+                continue
+            if edge_pct >= 50.0:  # hard cap — model is unreliable this far from the line
                 continue
             units = unit_scale(edge_pct, TEAM_TOTAL_SCALE)
             stars = stars_from_units(units)
@@ -1794,7 +1903,9 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
         else:
             continue
 
-        if stars < 4:
+        if prop_type == "Team Total" and stars < 3:
+            continue
+        elif prop_type != "Team Total" and stars < 4:
             continue
 
         implied = american_to_implied(price)
@@ -1821,7 +1932,32 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                 "", "", "", "Pending", "",
                 run_now,
             ])
-            # Team Total → also add to Edges tab
+            # Team Total → also Bet History (4+ star only; 3-star is TT tab watchlist only)
+            if stars >= 4:
+                ou = "O" if direction == "Over" else "U"
+                bet_on_label = f"{abbrev(player)} {ou}{line}"
+                tt_hist_row = [
+                    today, game_label, "",        # Date, Game, Time (fill from game data below)
+                    "", "",                        # Away SP, Home SP (not relevant for TT)
+                    "Team Total", direction, bet_on_label, stars_emoji(stars), units,
+                    book.title(), line, price, "",
+                    round(proj, 2), round(edge_pct, 2),
+                    "", "", "", "Pending", "",
+                    park_factor, "", conf_label, conf_pct_str,
+                    f"{round(edge_pct, 2)}%",
+                ]
+                # Fill Time (ET) from game data
+                g_data = game_by_teams.get((home, away), {})
+                ct = g_data.get("commence_time")
+                if ct:
+                    time_et = ct.astimezone(EASTERN).strftime("%-I:%M %p") \
+                              if sys.platform != "win32" else \
+                              ct.astimezone(EASTERN).strftime("%#I:%M %p")
+                    tt_hist_row[2] = time_et
+                tt_rows_for_history.append(tt_hist_row)
+            # Team Total → also add to Edges tab (4+ star only; 3-star is watchlist only)
+            if stars < 4:
+                continue
             g_data = game_by_teams.get((home, away), {})
             ct = g_data.get("commence_time")
             if ct:
@@ -1830,7 +1966,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                           ct.astimezone(EASTERN).strftime("%#I:%M %p")
             else:
                 time_et = ""
-            ou = "o" if direction == "Over" else "u"
+            ou = "O" if direction == "Over" else "U"
             bet_on = f"{abbrev(player)} {ou}{line}"
             gp = game_projections.get((home, away), {})
             tt_edge_rows.append([
@@ -1864,7 +2000,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
     sort_key = lambda r: (r[11], r[8])  # units col=11, edge col=8
     tt_rows.sort(key=sort_key, reverse=True)
     prop_rows.sort(key=lambda r: (r[11], float(str(r[9]).replace("%","")) if r[9] else 0), reverse=True)  # units col=11, edge% col=9
-    return tt_rows, tt_edge_rows, prop_rows
+    return tt_rows, tt_edge_rows, tt_rows_for_history, prop_rows
 
 
 # ── Edge analysis ─────────────────────────────────────────────────────────────
@@ -2026,16 +2162,17 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                         f"{proj['home_win']*100:.1f}%", f"{proj['away_win']*100:.1f}%",
                         conf, f"{round(conf_pct)}%", run_now,
                     ]
-                    edge_rows.append(edge_row)
+                    # Calibrated minimum: below 15% edge GT bets lose money regardless of direction
+                    # Data (309 bets): <15% = 75W/84L (47.2%, -5.46u); 15%+ = 81W/59L (57.9%, +13.30u)
+                    if edge_pct_of_line >= 15.0:
+                        edge_rows.append(edge_row)
 
                     # Track best per game (for snapshot — only if SP known)
                     # Priority: (1) same direction + best line (lower for Over, higher for Under),
                     #           (2) same line → best juice, (3) different direction → larger edge
-                    # Calibration 2026-07-12: Over bets 4★ win at 63%; Under bets 4★ win at 40%.
-                    # Under bets lose because wrong park factors generated false edges at under-projected
-                    # venues. Park factors updated 2026-07-12 using 1,428-game 2026 dataset.
-                    # Under threshold raised to 20% (vs 15% for Over) to account for higher variance.
-                    min_pct = 20.0 if direction == "Under" else 15.0
+                    # Calibration 2026-07-22: 15% minimum confirmed for both Over and Under.
+                    # 15-20% Under: 18W/11L (62.1%, +5.22u) — prior 20% floor was cutting good bets.
+                    min_pct = 15.0
                     athletics_home = (home == "Athletics")
                     if has_sp and stars >= 4 and not athletics_home and edge_pct_of_line >= min_pct:
                         prev = best_total_per_game.get(gid)
@@ -2135,7 +2272,10 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 if price is None:
                     continue
                 implied = american_to_implied(price)
-                edge_pct = (our_pct - implied) * 100
+                # Shrink ML win probability toward 50% (k=0.6) — calibration shows model
+                # is overconfident outside 58-63% range; shrinkage improves ROI significantly
+                ml_pct = 0.5 + 0.6 * (our_pct - 0.5)
+                edge_pct = (ml_pct - implied) * 100
 
                 if abs(edge_pct) >= 4.0 and edge_pct > 0:
                     units = unit_scale(edge_pct, ML_SCALE)
@@ -2190,7 +2330,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 implied  = american_to_implied(price)
                 edge_pct = (our_pct - implied) * 100
 
-                if edge_pct >= 4.0:
+                if 12.0 <= edge_pct <= 20.0:
                     units = unit_scale(edge_pct, RL_SCALE)
                     stars = stars_from_units(units)
                     conf  = "High" if stars == 5 else "Medium" if stars == 4 else "Standard"
@@ -2240,15 +2380,17 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
         p = best["proj"]
         edge_pct_of_line = (best["abs_edge"] / best["t_line"] * 100) if best["t_line"] else 0.0
         conf_pct = confidence_percentile(edge_pct_of_line, historical_edges["Game Total"])
+        parts = best["game_label"].split(" @ ")
+        gt_bet_on = f"{abbrev(parts[0].strip())} @ {abbrev(parts[1].strip())} {'O' if best['direction']=='Over' else 'U'}{best['t_line']}" if len(parts)==2 else f"{'O' if best['direction']=='Over' else 'U'}{best['t_line']}"
         history_rows.append([
             today, best["game_label"], best["time_et"],
             best["away_sp"], best["home_sp"],
-            "Game Total", best["direction"], stars_emoji(best["stars"]), best["units"],
+            "Game Total", best["direction"], gt_bet_on, stars_emoji(best["stars"]), best["units"],
             best["book"].title(), best["t_line"], best["juice"], best.get("dk_juice", ""),
             best["proj_total"], round(best["edge"], 2),
             "", "", "", "Pending", "",
             best["park_factor"], best["venue"], best["conf"], f"{conf_pct}%",
-            f"{best['direction']} {best['t_line']}", "",
+            "",
         ])
 
     # ── Build ML/RL Bet History rows (4+ star, has_sp, not Athletics home) ─────
@@ -2258,28 +2400,29 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
         conf_pct = confidence_percentile(s["edge_pct"], historical_edges[s["bet_type"]])
         conf = "High" if s["stars"] == 5 else "Medium" if s["stars"] == 4 else "Standard"
         if s["bet_type"] == "Moneyline":
+            ml_bet_on = f"{abbrev(s['bet_team'])} ML"
             history_rows.append([
                 today, s["game_label"], s["time_et"],
                 s["away_sp"], s["home_sp"],
-                "Moneyline", s["side"], stars_emoji(s["stars"]), s["units"],
+                "Moneyline", s["side"], ml_bet_on, stars_emoji(s["stars"]), s["units"],
                 s["book"].title(), "", s["price"], s.get("dk_juice", ""),
                 f"{s['our_pct']*100:.1f}%", "",
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
-                s["bet_team"], f"{round(s['edge_pct'], 2)}%",
+                f"{round(s['edge_pct'], 2)}%",
             ])
         else:  # Run Line
-            spread_str = f"{s['spread']:+.1f}" if s["spread"] is not None else ""
+            rl_bet_on = f"{abbrev(s['bet_team'])} -1.5"
             history_rows.append([
                 today, s["game_label"], s["time_et"],
                 s["away_sp"], s["home_sp"],
-                "Run Line", s["side"], stars_emoji(s["stars"]), s["units"],
+                "Run Line", s["side"], rl_bet_on, stars_emoji(s["stars"]), s["units"],
                 s["book"].title(), s["spread"] if s["spread"] is not None else "", s["price"],
                 s.get("dk_juice", ""),
                 f"{s['our_pct']*100:.1f}%", "",
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
-                f"{s['bet_team']} {spread_str}".strip(), f"{round(s['edge_pct'], 2)}%",
+                f"{round(s['edge_pct'], 2)}%",
             ])
 
     # ── Build ML/RL shadow rows from best-line-per-signal dict ──────────────
@@ -2416,10 +2559,11 @@ EDGES_HEADER = [
 
 HISTORY_HEADER = [
     "Date", "Game", "Time (ET)", "Away SP", "Home SP",
-    "Bet Type", "Direction", "Stars", "Units Bet",
+    "Bet Type", "Direction", "Bet On", "Stars", "Units Bet",
     "Book", "Book Line", "Book Juice", "DK Juice", "Our Projection",
     "Edge (runs)", "Away Score", "Home Score", "Actual Total",
-    "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %", "Bet On", "Edge %",
+    "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %",
+    "Edge %",
 ]
 
 SHADOW_HEADER = [
@@ -2567,6 +2711,7 @@ def main():
 
     print("Fetching venue + umpire data ...")
     today_str  = datetime.now().strftime("%Y-%m-%d")
+    today      = today_str
     venue_map, ump_map = fetch_venue_and_ump_map(today_str)
     print(f"  {len(venue_map)} games with venue data, {len(ump_map)} with umpire data")
     special_games = {k: next((f for vn, f in SPECIAL_VENUES.items() if vn in v.lower()), None)
@@ -2598,45 +2743,6 @@ def main():
     print(f"  {len(gt_shadow_rows)} game total shadow rows")
 
     # Edges tab write deferred until after team totals are added (see below)
-
-    # ── Snapshot to Bet History (first run of day only — newest date at top) ───
-    today = datetime.now().strftime("%Y-%m-%d")
-    ws_hist = ws(gc, ODDS_SHEET_ID, "Bet History")
-    if history_rows:
-        already_in_hist = today_already_in_history(ws_hist)
-        if already_in_hist and not force:
-            print("Bet History: today already exists — skipping snapshot (first-run protection)")
-        else:
-            existing = ws_hist.get_all_values()
-            if already_in_hist and force:
-                # Delete today's rows first so we re-insert fresh. These are
-                # always contiguous (today's snapshot always lands right
-                # after the header), so one ranged delete covers them —
-                # deleting one row at a time here can blow through Google
-                # Sheets API's write-requests-per-minute quota on tabs with
-                # many rows to delete.
-                rows_to_delete = [i+1 for i, r in enumerate(existing)
-                                  if i > 0 and r and r[0] == today]
-                if rows_to_delete:
-                    ws_hist.delete_rows(min(rows_to_delete), max(rows_to_delete))
-                existing = ws_hist.get_all_values()
-                print(f"  Force: deleted {len(rows_to_delete)} existing Bet History row(s) for today")
-            has_hist_header = existing and existing[0] and existing[0][0] == "Date"
-            if not has_hist_header:
-                ws_hist.update([HISTORY_HEADER] + history_rows, value_input_option="USER_ENTERED")
-            else:
-                h_units_col   = HISTORY_HEADER.index("Units Bet")
-                h_confpct_col = HISTORY_HEADER.index("Confidence %")
-                def _hist_sort_key(r):
-                    u = float(r[h_units_col]) if r[h_units_col] else 0.0
-                    try: c = float(str(r[h_confpct_col]).replace("%", ""))
-                    except: c = 0.0
-                    return (u, c)
-                history_rows.sort(key=_hist_sort_key, reverse=True)
-                ws_hist.insert_rows(history_rows, row=2, value_input_option="USER_ENTERED")
-            print(f"Inserted {len(history_rows)} bets at top of 'Bet History'")
-    else:
-        print("No qualifying bets to snapshot")
 
     # ── Snapshot to Game Total Shadow (first run of day only) ────────────────
     ws_gt_shadow = ws(gc, ODDS_SHEET_ID, "Game Totals")
@@ -2695,14 +2801,52 @@ def main():
 
     # ── Player Props analysis and snapshot ───────────────────────────────────
     print("\nRunning player props analysis ...")
-    tt_rows, tt_edge_rows, prop_shadow_rows = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
-                                                            sp_opp_stats=sp_opp_stats,
-                                                            game_projections=game_projections,
-                                                            historical_edges=historical_edges)
+    tt_rows, tt_edge_rows, tt_rows_for_history, prop_shadow_rows = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
+                                                                                sp_opp_stats=sp_opp_stats,
+                                                                                game_projections=game_projections,
+                                                                                historical_edges=historical_edges)
     print(f"  {len(tt_rows)} team total(s) + {len(prop_shadow_rows)} player prop(s) found")
     edge_rows.extend(tt_edge_rows)
+    history_rows.extend(tt_rows_for_history)
 
-    # ── Deduplicate: best book per (Game, Bet Type, Direction) ───────────────
+    # ── Snapshot to Bet History (after TT rows merged — newest date at top) ──
+    ws_hist = ws(gc, ODDS_SHEET_ID, "Bet History")
+    if history_rows:
+        already_in_hist = today_already_in_history(ws_hist)
+        if already_in_hist and not force:
+            print("Bet History: today already exists — skipping snapshot (first-run protection)")
+        else:
+            existing = ws_hist.get_all_values()
+            if already_in_hist and force:
+                rows_to_delete = [i+1 for i, r in enumerate(existing)
+                                  if i > 0 and r and r[0] == today]
+                if rows_to_delete:
+                    ws_hist.delete_rows(min(rows_to_delete), max(rows_to_delete))
+                existing = ws_hist.get_all_values()
+                print(f"  Force: deleted {len(rows_to_delete)} existing Bet History row(s) for today")
+            has_hist_header = existing and existing[0] and existing[0][0] == "Date"
+            if not has_hist_header:
+                ws_hist.update([HISTORY_HEADER] + history_rows, value_input_option="USER_ENTERED")
+            else:
+                h_units_col   = HISTORY_HEADER.index("Units Bet")
+                h_confpct_col = HISTORY_HEADER.index("Confidence %")
+                def _hist_sort_key(r):
+                    u = float(r[h_units_col]) if r[h_units_col] else 0.0
+                    try: c = float(str(r[h_confpct_col]).replace("%", ""))
+                    except: c = 0.0
+                    return (u, c)
+                history_rows.sort(key=_hist_sort_key, reverse=True)
+                ws_hist.insert_rows(history_rows, row=2, value_input_option="USER_ENTERED")
+            print(f"Inserted {len(history_rows)} bets at top of 'Bet History'")
+    else:
+        print("No qualifying bets to snapshot")
+
+    # ── Filter to 4+ star bets first, then deduplicate ───────────────────────
+    # Order matters: filter before dedup so a 3-star row at better juice can't
+    # knock out a 4-star row for the same (Game, Bet Type, Direction) key.
+    stars_col = EDGES_HEADER.index("Stars")
+    edge_rows = [r for r in edge_rows if str(r[stars_col]).count("⭐") >= 4]
+
     def _parse_juice(s):
         try:
             return int(str(s).replace("'", "").replace("+", "").strip())

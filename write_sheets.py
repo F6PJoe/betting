@@ -26,6 +26,24 @@ BESTBETS_SHEET_ID   = "1_PQ19dvvD51uYCZcNw6EzV37RkXdDTZpemE9xbDwgTw"
 today     = datetime.now().strftime("%Y-%m-%d")
 yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
+# Full name → abbreviation for cheat sheet / tracker labels
+_FULL_TO_ABBREV = {
+    "Arizona Diamondbacks": "ARI", "Athletics": "ATH",          "Atlanta Braves": "ATL",
+    "Baltimore Orioles": "BAL",    "Boston Red Sox": "BOS",      "Chicago Cubs": "CHC",
+    "Chicago White Sox": "CWS",    "Cincinnati Reds": "CIN",     "Cleveland Guardians": "CLE",
+    "Colorado Rockies": "COL",     "Detroit Tigers": "DET",      "Houston Astros": "HOU",
+    "Kansas City Royals": "KC",    "Los Angeles Angels": "LAA",  "Los Angeles Dodgers": "LAD",
+    "Miami Marlins": "MIA",        "Milwaukee Brewers": "MIL",   "Minnesota Twins": "MIN",
+    "New York Mets": "NYM",        "New York Yankees": "NYY",    "Oakland Athletics": "ATH",
+    "Philadelphia Phillies": "PHI","Pittsburgh Pirates": "PIT",  "San Diego Padres": "SD",
+    "Seattle Mariners": "SEA",     "San Francisco Giants": "SF", "St. Louis Cardinals": "STL",
+    "Tampa Bay Rays": "TB",        "Texas Rangers": "TEX",       "Toronto Blue Jays": "TOR",
+    "Washington Nationals": "WSH",
+}
+
+def abbrev_team(name: str) -> str:
+    return _FULL_TO_ABBREV.get(name.strip(), name.strip())
+
 def col(header, name):
     try:    return header.index(name)
     except: return -1
@@ -135,21 +153,24 @@ def build_notes(row):
 def bet_label(row):
     btype = hv(row, hc_btype)
     direc = hv(row, hc_dir)
-    beton = hv(row, hc_beton).replace(" -1.5", "").strip()  # strip if Bet History already includes it
+    beton = hv(row, hc_beton).replace(" -1.5", "").replace(" ML", "").strip()
     game  = hv(row, hc_game)
     line  = hv(row, hc_line)
     if btype == "Game Total":
-        d = "o" if direc == "Over" else "u"
-        # Normalize line: strip trailing .0 so "7.0" → "7"
+        d = "O" if direc == "Over" else "U"
         try:
             line_fmt = str(int(float(line))) if float(line) == int(float(line)) else line
         except (ValueError, TypeError):
             line_fmt = line
+        # Abbreviate team names in game label (e.g. "Cincinnati Reds @ Seattle Mariners" → "CIN @ SEA")
+        parts = game.split(" @ ")
+        if len(parts) == 2:
+            game = f"{abbrev_team(parts[0])} @ {abbrev_team(parts[1])}"
         return f"{game} {d}{line_fmt}"
     elif btype == "Moneyline":
-        return f"{beton} ML"
+        return f"{abbrev_team(beton)} ML"
     elif btype == "Run Line":
-        return f"{beton} -1.5"
+        return f"{abbrev_team(beton)} -1.5"
     return beton
 
 # Collect today's official bets sorted by units desc, confidence desc
@@ -160,7 +181,18 @@ def sort_key(row):
     except: c = 0.0
     return (u, c)
 
-today_bets = [r for r in hist_data if hv(r, hc_date) == today]
+_all_today_bets = [r for r in hist_data
+                   if hv(r, hc_date) == today
+                   and parse_stars(hv(r, hc_stars)) >= 4]
+# Deduplicate to best bet per (game, bet type, direction) — keeps highest units
+# e.g. u9.5 and u9.0 on the same game both qualify; only the better edge shows
+_best_bets: dict = {}
+for _r in _all_today_bets:
+    _key = (hv(_r, hc_game), hv(_r, hc_btype), hv(_r, hc_dir))
+    _u, _c = sort_key(_r)
+    if _key not in _best_bets or (_u, _c) > _best_bets[_key][0]:
+        _best_bets[_key] = ((_u, _c), _r)
+today_bets = [v[1] for v in _best_bets.values()]
 today_bets.sort(key=sort_key, reverse=True)
 
 # ── Read today's team totals ──────────────────────────────────────────────────
@@ -188,15 +220,28 @@ def tt_sort_key(row):
     except: u = 0.0
     return u
 
-today_tt = [r for r in tt_data if tv(r, tc_date) == today]
+_all_today_tt = [r for r in tt_data
+                 if tv(r, tc_date) == today
+                 and str(tv(r, tc_stars)).count("⭐") >= 4]
+# Deduplicate to best-juice book per (team, direction) — same logic as Edges tab
+def _tt_juice_val(row):
+    try: return _parse_odds_str(tv(row, tc_juice))
+    except: return -999
+_best_tt: dict = {}
+for _r in _all_today_tt:
+    _key = (tv(_r, tc_game), tv(_r, tc_dir))  # same key as Edges tab: best per game+direction
+    _j = _tt_juice_val(_r)
+    if _key not in _best_tt or _j > _best_tt[_key][0]:
+        _best_tt[_key] = (_j, _r)
+today_tt = [v[1] for v in _best_tt.values()]
 today_tt.sort(key=tt_sort_key, reverse=True)
 
 def tt_label(row):
-    team = tv(row, tc_team)
+    team  = tv(row, tc_team)
     direc = tv(row, tc_dir)
     line  = tv(row, tc_line)
-    d = "Over" if direc == "Over" else "Under"
-    return f"{team} {d} {line}"
+    d = "O" if direc == "Over" else "U"
+    return f"{abbrev_team(team)} {d}{line}"
 
 def tt_notes(row):
     team  = tv(row, tc_team)
@@ -234,6 +279,8 @@ def _juice_ok(odds_str):
         return True
 
 for row in today_bets:
+    if hv(row, hc_btype) == "Team Total":
+        continue  # TT bets come from Team Totals tab (avoid double-counting)
     juice_str = hv(row, hc_juice) or hv(row, hc_dkjuice)
     if not _juice_ok(juice_str):
         continue
@@ -290,6 +337,22 @@ print("Best Bets: 1 row written.")
 sh3  = gc.open_by_key(CHEATSHEET_SHEET_ID)
 ws3  = sh3.worksheet("Tracker - Dave")
 rows = ws3.get_all_values()
+
+# ── Retroactive repair: write M formula for any row that has a result (I=W/L/P)
+# but is missing the M formula (formula col M is blank). M must be set for K to
+# compute profit correctly (K = M-J on a win, J*-1 on a loss).
+m_repair = []
+for i, row in enumerate(rows[1:], start=2):
+    if not row or not row[0].strip():
+        continue
+    result_i = row[8] if len(row) > 8 else ""
+    m_val    = row[12] if len(row) > 12 else ""
+    # Row has a result but M is blank → formula was never written
+    if result_i.strip() in ("W", "L", "P") and m_val.strip() == "":
+        m_repair.append({"range": f"M{i}", "values": [[f"=if(I{i}=\"W\",H{i}*J{i},J{i}*-1)"]]})
+if m_repair:
+    sheets_call(ws3.batch_update, m_repair, value_input_option="USER_ENTERED")
+    print(f"Tracker: repaired M formula for {len(m_repair)} historical rows.")
 
 # Finalize yesterday's rows: find Pending entries (col N has stake, col I is blank)
 # Match by searching col E (bet label) against graded Bet History rows
@@ -435,6 +498,7 @@ if today_already:
             # Fallback: find last data row
             insert_after = max((i + 1 for i, r in enumerate(tracker_data) if r and r[0].strip()), default=1)
         new_updates = []
+        formula_updates = []
         for i in range(found, expected):
             r = insert_after + 1 + (i - found)
             label, units, odds, _ = all_cheat_rows[i]
@@ -444,8 +508,11 @@ if today_already:
                 {"range": f"F{r}", "values": [[odds_to_num(odds)]]},
                 {"range": f"N{r}", "values": [[units]]},
             ]
+            formula_updates.append({"range": f"M{r}", "values": [[f"=if(I{r}=\"W\",H{r}*J{r},J{r}*-1)"]]})
         if new_updates:
             sheets_call(ws3.batch_update, new_updates, value_input_option="RAW")
+        if formula_updates:
+            sheets_call(ws3.batch_update, formula_updates, value_input_option="USER_ENTERED")
             print(f"  Added {expected - found} new today rows (bets added by force rerun).")
 else:
     # Find last row with data in col A (date column) — more reliable than any-cell check
@@ -467,6 +534,7 @@ else:
             break
 
     today_updates = []
+    formula_updates = []
     for i, (label, units, odds, notes) in enumerate(all_cheat_rows):
         r = next_row + i
         today_updates += [
@@ -475,7 +543,10 @@ else:
             {"range": f"F{r}", "values": [[odds_to_num(odds)]]},
             {"range": f"N{r}", "values": [[units]]},
         ]
+        formula_updates.append({"range": f"M{r}", "values": [[f"=if(I{r}=\"W\",H{r}*J{r},J{r}*-1)"]]})
 
     if today_updates:
         sheets_call(ws3.batch_update, today_updates, value_input_option="RAW")
+    if formula_updates:
+        sheets_call(ws3.batch_update, formula_updates, value_input_option="USER_ENTERED")
     print(f"Tracker: {len(all_cheat_rows)} new rows entered starting at row {next_row}.")

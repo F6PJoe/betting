@@ -37,6 +37,31 @@ SCOPES = [
 MLB_STATS_BASE    = "https://statsapi.mlb.com/api/v1/schedule"
 MLB_BOXSCORE_BASE = "https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
 
+# Abbrev → full name (matches TEAM_ABBREV in analyze_edges.py)
+TEAM_ABBREV = {
+    "ARI": "Arizona Diamondbacks", "ATH": "Athletics",            "ATL": "Atlanta Braves",
+    "BAL": "Baltimore Orioles",    "BOS": "Boston Red Sox",       "CHC": "Chicago Cubs",
+    "CWS": "Chicago White Sox",    "CIN": "Cincinnati Reds",      "CLE": "Cleveland Guardians",
+    "COL": "Colorado Rockies",     "DET": "Detroit Tigers",       "HOU": "Houston Astros",
+    "KCR": "Kansas City Royals",   "LAA": "Los Angeles Angels",   "LAD": "Los Angeles Dodgers",
+    "MIA": "Miami Marlins",        "MIL": "Milwaukee Brewers",    "MIN": "Minnesota Twins",
+    "NYM": "New York Mets",        "NYY": "New York Yankees",     "OAK": "Athletics",
+    "PHI": "Philadelphia Phillies","PIT": "Pittsburgh Pirates",   "SDP": "San Diego Padres",
+    "SEA": "Seattle Mariners",     "SFG": "San Francisco Giants", "STL": "St. Louis Cardinals",
+    "TBR": "Tampa Bay Rays",       "TB":  "Tampa Bay Rays",       "TEX": "Texas Rangers",
+    "TOR": "Toronto Blue Jays",    "WSN": "Washington Nationals", "WSH": "Washington Nationals",
+    "KC":  "Kansas City Royals",   "SD":  "San Diego Padres",     "SF":  "San Francisco Giants",
+}
+
+def expand_game_label(label: str) -> str:
+    """Convert 'BAL @ BOS' → 'baltimore orioles @ boston red sox' for scores dict lookup."""
+    parts = label.strip().split(" @ ")
+    if len(parts) != 2:
+        return label.lower()
+    away = TEAM_ABBREV.get(parts[0].strip().upper(), parts[0].strip())
+    home = TEAM_ABBREV.get(parts[1].strip().upper(), parts[1].strip())
+    return f"{away} @ {home}".lower()
+
 
 # ── Google helpers ────────────────────────────────────────────────────────────
 def auth():
@@ -191,7 +216,9 @@ def grade_history(ws_hist, scores: dict, yesterday: str) -> int:
         if date != yesterday or result in {"Win", "Loss", "Push"}:
             continue
 
-        score_data = scores.get(game)
+        # Game label may be abbreviated ("BAL @ BOS") — expand to full name for scores lookup
+        expanded = expand_game_label(row[c_game])
+        score_data = scores.get(expanded) or scores.get(game)
         if not score_data:
             print(f"  [no score] {row[c_game]}")
             continue
@@ -205,6 +232,45 @@ def grade_history(ws_hist, scores: dict, yesterday: str) -> int:
         parts      = game_label.split(" @ ")
         game_away  = parts[0].strip() if len(parts) == 2 else ""
         game_home  = parts[1].strip() if len(parts) == 2 else ""
+
+        if bet_type == "Team Total":
+            # bet_on = "TB O3.5" — first token is team abbreviation
+            bet_on_parts = bet_on.split()
+            team_abbr    = bet_on_parts[0] if bet_on_parts else ""
+            full_name    = TEAM_ABBREV.get(team_abbr.upper(), team_abbr)
+            away_full    = score_data.get("away_team", "")
+            home_full    = score_data.get("home_team", "")
+            if full_name.lower() == home_full.lower():
+                team_score = home_s
+            elif full_name.lower() == away_full.lower():
+                team_score = away_s
+            else:
+                continue  # can't match team
+            try:
+                line = float(book_line)
+                u    = float(units_bet)
+            except (ValueError, TypeError):
+                continue
+            diff = team_score - line if direction.upper() in ("OVER", "O") else line - team_score
+            push = abs(diff) < 0.01
+            win  = diff > 0.01
+            result_grade  = "Push" if push else ("Win" if win else "Loss")
+            units_result  = 0.0 if push else (u if win else -u)
+            updates.append({
+                "row":          i,
+                "away_score":   away_s,
+                "home_score":   home_s,
+                "actual_total": team_score,
+                "result":       result_grade,
+                "units_result": round(units_result, 2),
+                "c_away_sc":    c_away_sc + 1,
+                "c_home_sc":    c_home_sc + 1,
+                "c_actual":     c_actual + 1,
+                "c_result":     c_result + 1,
+                "c_units_res":  c_units_res + 1,
+            })
+            graded += 1
+            continue
 
         if bet_type == "Moneyline":
             win  = (bet_on == game_home and home_s > away_s) or \
@@ -507,19 +573,20 @@ def parse_stars(val: str) -> int:
 
 
 # ── Performance tab rebuild ───────────────────────────────────────────────────
-MODEL_FIX_DATE       = "2026-06-20"  # original ML/RL/GT fix date — kept for ML and RL continuity
-MODEL_FIX_DATE_GT    = "2026-07-12"  # park factor full recalibration (1,428-game 2026 dataset) + Under threshold raised to 20%
-PROPS_MODEL_START    = "2026-07-10"  # First day props used Poisson probability edge.
+MODEL_FIX_DATE       = "2026-07-22"  # Full recalibration: ML shrinkage, RL 12-20% window, GT 15% min,
+                                     # SP K caps, H+R+RBI edge caps + PA reduction, TB convolution model.
+                                     # All prior data excluded — too many overlapping changes to isolate signal.
+MODEL_FIX_DATE_GT    = "2026-07-22"  # Same reset date — GT Under floor corrected back to 15% from 20%
+PROPS_MODEL_START    = "2026-07-22"  # TB convolution model, SP K / H+R+RBI edge caps all live this date
 PROPS_MODEL_START_BY_TYPE = {
-    "Total Bases": "2026-07-12",   # 2026-07-12: pitcher ERA adjustment added; prior data Over-biased on 1.5 lines (43% win rate)
-    "H+R+RBI":     "2026-07-12",   # 2026-07-12: pitcher ERA adjustment added; prior data Over-biased on 1.5 lines (39% win rate)
-    "Home Run":    "2026-07-12",   # shadow-only, no betting data worth keeping
-    # SP Strikeouts uses PROPS_MODEL_START (2026-07-10) — Poisson fix is sufficient
+    "Total Bases": "2026-07-22",   # Convolution model replaces Poisson; Under shadow-only
+    "H+R+RBI":     "2026-07-22",   # Edge caps (Over 4-12%, Under 15%+) + PA 3.5 constant
+    "Home Run":    "2026-07-22",   # shadow-only, no betting data worth keeping
+    "SP Strikeouts": "2026-07-22", # Edge caps (Over 4-25%, Under 4-20%) recalibrated
 }
-# All-time aggregates below are permanently a blend of pre-fix (biased) and
-# post-fix (corrected) data — that blend dilutes slowly, so a separate
-# "since fix" table is tracked alongside the all-time one so nobody draws
-# conclusions from the contaminated combined number while it's still diluting.
+# Performance tracking restarts from 2026-07-22 — all prior data excluded because
+# multiple simultaneous calibration changes make it impossible to isolate signal
+# from noise in the pre-change data.
 
 
 def rebuild_performance(gc):
@@ -797,7 +864,7 @@ def rebuild_performance(gc):
         full_row("All",     gt_official,    ml_all,   rl_all,   combo_all,   tt_all,
                  prop_all["SP Strikeouts"], prop_all["Total Bases"], prop_all["Home Run"], prop_all["H+R+RBI"]),
         [""],
-        [f"SINCE MODEL FIX (ML/RL/TT: {MODEL_FIX_DATE}+  |  GT: {MODEL_FIX_DATE_GT}+  |  Props: see type)"],
+        [f"SINCE FULL RECALIBRATION ({MODEL_FIX_DATE}+) — ML shrinkage k=0.6 | RL 12-20% | GT 15% min | SP K caps | H+R+RBI caps + PA=3.5 | TB convolution model"],
         sec_hdr,
         col_hdr,
         full_row("3-Star",  [],                 ml_b_fix[3],  rl_b_fix[3],  combo_b_fix[3],  tt_b_fix[3],
@@ -898,23 +965,33 @@ def grade_team_totals(ws_tt, scores: dict, yesterday: str) -> int:
         game_str  = row[c_game] if c_game >= 0 else ""
         team      = row[c_team].strip() if c_team >= 0 else ""
         direction = row[c_dir].strip() if c_dir >= 0 else ""
-        game_key  = game_str.lower()
-        score_data = scores.get(game_key)
+        # Game label may be abbreviated — expand for scores lookup
+        expanded   = expand_game_label(game_str)
+        score_data = scores.get(expanded) or scores.get(game_str.lower())
         if not score_data:
             continue
 
-        parts     = game_str.split(" @ ")
-        away_team = parts[0].strip() if len(parts) == 2 else ""
-        home_team = parts[1].strip() if len(parts) == 2 else ""
+        # Use full team names from scores dict for home/away identification
+        away_team = score_data.get("away_team", "")
+        home_team = score_data.get("home_team", "")
         away_s    = score_data["away_score"]
         home_s    = score_data["home_score"]
 
-        if team == home_team:
-            actual = home_s
-        elif team == away_team:
-            actual = away_s
+        # Match team by full name or abbreviation prefix
+        team_lower = team.lower()
+        if team_lower == home_team.lower() or team_lower == away_team.lower():
+            actual = home_s if team_lower == home_team.lower() else away_s
         else:
-            continue
+            # Fallback: check if team abbrev from game_str matches
+            parts    = game_str.split(" @ ")
+            abbr_away = parts[0].strip() if len(parts) == 2 else ""
+            abbr_home = parts[1].strip() if len(parts) == 2 else ""
+            if team == TEAM_ABBREV.get(abbr_home, abbr_home) or team == abbr_home:
+                actual = home_s
+            elif team == TEAM_ABBREV.get(abbr_away, abbr_away) or team == abbr_away:
+                actual = away_s
+            else:
+                continue
 
         try:
             line_val = float(row[c_line]) if c_line >= 0 else None
@@ -1194,11 +1271,11 @@ def main():
     # written with the current HISTORY_HEADER column order.
     HISTORY_HEADER = [
         "Date", "Game", "Time (ET)", "Away SP", "Home SP",
-        "Bet Type", "Direction", "Stars", "Units Bet",
+        "Bet Type", "Direction", "Bet On", "Stars", "Units Bet",
         "Book", "Book Line", "Book Juice", "DK Juice", "Our Projection",
         "Edge (runs)", "Away Score", "Home Score", "Actual Total",
         "Result", "Units Result", "Park Factor", "Venue",
-        "Confidence", "Confidence %", "Bet On", "Edge %",
+        "Confidence", "Confidence %", "Edge %",
     ]
     hi = {h: i for i, h in enumerate(HISTORY_HEADER)}
     def hv(row, col_name):
