@@ -416,6 +416,7 @@ for i, row in enumerate(rows[1:], start=2):
             finalize_updates.append({"range": f"G{i}", "values": [[stake]]})
             finalize_updates.append({"range": f"I{i}", "values": [[wlp]]})
             finalize_updates.append({"range": f"N{i}", "values": [[""]]})
+            finalize_updates.append({"range": f"M{i}", "values": [[f'=if(I{i}="W",H{i}*J{i},J{i}*-1)']]})
         else:
             unmatched.append(f"  Row {i} ({date_a}): '{bet_col_e}' — no match")
 
