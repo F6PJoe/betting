@@ -423,7 +423,7 @@ def grade_shadow(ws_shadow, scores: dict, yesterday: str) -> tuple[int, float]:
         if date != yesterday or row[c_result]:
             continue
 
-        score_data = scores.get(game)
+        score_data = scores.get(game) or scores.get(expand_game_label(row[c_game] if c_game is not None else ""))
         if not score_data:
             continue
 
