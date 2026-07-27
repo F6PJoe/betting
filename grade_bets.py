@@ -910,15 +910,41 @@ def rebuild_performance(gc):
     )
     # Header row — P/L label at col B of each section (col index 1, 8, 15, 22, 29, 36, 43, 50)
     pl_hdr = ["Date",
-              "GT P/L (4★+)", "", "", "", "", "", "",
-              "ML P/L (4★+)", "", "", "", "", "", "",
-              "RL P/L (4★+)", "", "", "", "", "", "",
-              "ML+RL P/L (4★+)", "", "", "", "", "", "",
-              "TT P/L (4★+)", "", "", "", "", "", "",
-              "SP K P/L (4★+)", "", "", "", "", "", "",
-              "TB P/L (4★+)", "", "", "", "", "", "",
-              "H+R+RBI P/L (4★+)"]
+              "GT P/L (4★+)", "L7", "L14", "L30", "", "", "",
+              "ML P/L (4★+)", "L7", "L14", "L30", "", "", "",
+              "RL P/L (4★+)", "L7", "L14", "L30", "", "", "",
+              "ML+RL P/L (4★+)", "L7", "L14", "L30", "", "", "",
+              "TT P/L (4★+)", "L7", "L14", "L30", "", "", "",
+              "SP K P/L (4★+)", "L7", "L14", "L30", "", "", "",
+              "TB P/L (4★+)", "L7", "L14", "L30", "", "", "",
+              "H+R+RBI P/L (4★+)", "L7", "L14", "L30"]
     perf_rows.append(pl_hdr)
+
+    # Rolling window totals — sums over the N most recent calendar days with data
+    def rolling(daily_dict, n):
+        dates_in_window = [d for d in all_dates if d][:n]
+        return round(sum(daily_dict.get(d, 0.0) for d in dates_in_window), 3)
+
+    gt_l7,  gt_l14,  gt_l30  = rolling(daily_gt, 7),        rolling(daily_gt, 14),        rolling(daily_gt, 30)
+    ml_l7,  ml_l14,  ml_l30  = rolling(daily_ml_off, 7),    rolling(daily_ml_off, 14),    rolling(daily_ml_off, 30)
+    rl_l7,  rl_l14,  rl_l30  = rolling(daily_rl_off, 7),    rolling(daily_rl_off, 14),    rolling(daily_rl_off, 30)
+    co_l7,  co_l14,  co_l30  = ml_l7+rl_l7,                 ml_l14+rl_l14,                ml_l30+rl_l30
+    tt_l7,  tt_l14,  tt_l30  = rolling(daily_tt, 7),         rolling(daily_tt, 14),         rolling(daily_tt, 30)
+    spk_l7, spk_l14, spk_l30 = (rolling(daily_props["SP Strikeouts"], n) for n in (7, 14, 30))
+    tb_l7,  tb_l14,  tb_l30  = (rolling(daily_props["Total Bases"], n) for n in (7, 14, 30))
+    hrr_l7, hrr_l14, hrr_l30 = (rolling(daily_props["H+R+RBI"], n) for n in (7, 14, 30))
+
+    perf_rows.append([
+        "",
+        gt_l7,   gt_l14,   gt_l30,   "", "", "", "",
+        ml_l7,   ml_l14,   ml_l30,   "", "", "", "",
+        rl_l7,   rl_l14,   rl_l30,   "", "", "", "",
+        co_l7,   co_l14,   co_l30,   "", "", "", "",
+        tt_l7,   tt_l14,   tt_l30,   "", "", "", "",
+        spk_l7,  spk_l14,  spk_l30,  "", "", "", "",
+        tb_l7,   tb_l14,   tb_l30,   "", "", "", "",
+        hrr_l7,  hrr_l14,  hrr_l30,
+    ])
 
     for d in all_dates:
         gt_pl   = round(daily_gt.get(d, 0.0), 3)
