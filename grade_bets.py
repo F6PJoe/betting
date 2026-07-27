@@ -936,14 +936,14 @@ def rebuild_performance(gc):
 
     perf_rows.append([
         "",
-        gt_l7,   gt_l14,   gt_l30,   "", "", "", "",
-        ml_l7,   ml_l14,   ml_l30,   "", "", "", "",
-        rl_l7,   rl_l14,   rl_l30,   "", "", "", "",
-        co_l7,   co_l14,   co_l30,   "", "", "", "",
-        tt_l7,   tt_l14,   tt_l30,   "", "", "", "",
-        spk_l7,  spk_l14,  spk_l30,  "", "", "", "",
-        tb_l7,   tb_l14,   tb_l30,   "", "", "", "",
-        hrr_l7,  hrr_l14,  hrr_l30,
+        "",  gt_l7,   gt_l14,   gt_l30,   "", "", "",
+        "",  ml_l7,   ml_l14,   ml_l30,   "", "", "",
+        "",  rl_l7,   rl_l14,   rl_l30,   "", "", "",
+        "",  co_l7,   co_l14,   co_l30,   "", "", "",
+        "",  tt_l7,   tt_l14,   tt_l30,   "", "", "",
+        "",  spk_l7,  spk_l14,  spk_l30,  "", "", "",
+        "",  tb_l7,   tb_l14,   tb_l30,   "", "", "",
+        "",  hrr_l7,  hrr_l14,  hrr_l30,
     ])
 
     for d in all_dates:
