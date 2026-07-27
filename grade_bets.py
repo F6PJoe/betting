@@ -886,7 +886,7 @@ def rebuild_performance(gc):
         full_row("All",     gt_official,    ml_all,   rl_all,   combo_all,   tt_all,
                  prop_all["SP Strikeouts"], prop_all["Total Bases"], prop_all["H+R+RBI"]),
         [""],
-        [f"SINCE FULL RECALIBRATION ({MODEL_FIX_DATE}+) — ML shrinkage k=0.6 | RL 12-20% | GT 15% min | SP K caps | H+R+RBI caps + PA=3.5 | TB convolution model"],
+        [f"SINCE RECALIBRATION ({MODEL_FIX_DATE}+)"],
         sec_hdr,
         col_hdr,
         full_row("3-Star",  [],                 ml_b_fix[3],  rl_b_fix[3],  combo_b_fix[3],  tt_b_fix[3],
