@@ -738,7 +738,7 @@ def rebuild_performance(gc):
         losses = sum(1 for _, _, r in bets if r == "Loss")
         pushes = sum(1 for _, _, r in bets if r == "Push")
         total  = wins + losses + pushes
-        roi    = round(sum(u for _, u, _ in bets), 3)
+        roi    = round(sum(u for _, u, _ in bets), 1)
         wp     = f"{wins/(wins+losses)*100:.1f}%" if (wins+losses) > 0 else "—"
         return [total, wins, losses, pushes, wp, roi]
 
@@ -923,7 +923,7 @@ def rebuild_performance(gc):
     # Rolling window totals — sums over the N most recent calendar days with data
     def rolling(daily_dict, n):
         dates_in_window = [d for d in all_dates if d][:n]
-        return round(sum(daily_dict.get(d, 0.0) for d in dates_in_window), 3)
+        return round(sum(daily_dict.get(d, 0.0) for d in dates_in_window), 1)
 
     gt_l7,  gt_l14,  gt_l30  = rolling(daily_gt, 7),        rolling(daily_gt, 14),        rolling(daily_gt, 30)
     ml_l7,  ml_l14,  ml_l30  = rolling(daily_ml_off, 7),    rolling(daily_ml_off, 14),    rolling(daily_ml_off, 30)
@@ -947,14 +947,14 @@ def rebuild_performance(gc):
     ])
 
     for d in all_dates:
-        gt_pl   = round(daily_gt.get(d, 0.0), 3)
-        ml_pl   = round(daily_ml_off.get(d, 0.0), 3)
-        rl_pl   = round(daily_rl_off.get(d, 0.0), 3)
-        com_pl  = round(ml_pl + rl_pl, 3)
-        tt_pl   = round(daily_tt.get(d, 0.0), 3)
-        spk_pl  = round(daily_props["SP Strikeouts"].get(d, 0.0), 3)
-        tb_pl   = round(daily_props["Total Bases"].get(d, 0.0), 3)
-        hrr_pl  = round(daily_props["H+R+RBI"].get(d, 0.0), 3)
+        gt_pl   = round(daily_gt.get(d, 0.0), 1)
+        ml_pl   = round(daily_ml_off.get(d, 0.0), 1)
+        rl_pl   = round(daily_rl_off.get(d, 0.0), 1)
+        com_pl  = round(ml_pl + rl_pl, 1)
+        tt_pl   = round(daily_tt.get(d, 0.0), 1)
+        spk_pl  = round(daily_props["SP Strikeouts"].get(d, 0.0), 1)
+        tb_pl   = round(daily_props["Total Bases"].get(d, 0.0), 1)
+        hrr_pl  = round(daily_props["H+R+RBI"].get(d, 0.0), 1)
         perf_rows.append([
             d,
             gt_pl,  "", "", "", "", "", "",
