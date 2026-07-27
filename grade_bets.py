@@ -862,7 +862,6 @@ def rebuild_performance(gc):
         "TEAM TOTALS",
         "SP STRIKEOUTS",
         "TOTAL BASES",
-        "HOME RUNS",
         "H+R+RBI",
     ]
 
@@ -879,25 +878,25 @@ def rebuild_performance(gc):
         sec_hdr,
         col_hdr,
         full_row("3-Star",  [],             ml_b[3],  rl_b[3],  combo_b[3],  tt_b[3],
-                 prop_b["SP Strikeouts"][3], prop_b["Total Bases"][3], prop_b["Home Run"][3], prop_b["H+R+RBI"][3]),
+                 prop_b["SP Strikeouts"][3], prop_b["Total Bases"][3], prop_b["H+R+RBI"][3]),
         full_row("4-Star",  gt_buckets[4],  ml_b[4],  rl_b[4],  combo_b[4],  tt_b[4],
-                 prop_b["SP Strikeouts"][4], prop_b["Total Bases"][4], prop_b["Home Run"][4], prop_b["H+R+RBI"][4]),
+                 prop_b["SP Strikeouts"][4], prop_b["Total Bases"][4], prop_b["H+R+RBI"][4]),
         full_row("5-Star",  gt_buckets[5],  ml_b[5],  rl_b[5],  combo_b[5],  tt_b[5],
-                 prop_b["SP Strikeouts"][5], prop_b["Total Bases"][5], prop_b["Home Run"][5], prop_b["H+R+RBI"][5]),
+                 prop_b["SP Strikeouts"][5], prop_b["Total Bases"][5], prop_b["H+R+RBI"][5]),
         full_row("All",     gt_official,    ml_all,   rl_all,   combo_all,   tt_all,
-                 prop_all["SP Strikeouts"], prop_all["Total Bases"], prop_all["Home Run"], prop_all["H+R+RBI"]),
+                 prop_all["SP Strikeouts"], prop_all["Total Bases"], prop_all["H+R+RBI"]),
         [""],
         [f"SINCE FULL RECALIBRATION ({MODEL_FIX_DATE}+) — ML shrinkage k=0.6 | RL 12-20% | GT 15% min | SP K caps | H+R+RBI caps + PA=3.5 | TB convolution model"],
         sec_hdr,
         col_hdr,
         full_row("3-Star",  [],                 ml_b_fix[3],  rl_b_fix[3],  combo_b_fix[3],  tt_b_fix[3],
-                 prop_b_fix["SP Strikeouts"][3], prop_b_fix["Total Bases"][3], prop_b_fix["Home Run"][3], prop_b_fix["H+R+RBI"][3]),
+                 prop_b_fix["SP Strikeouts"][3], prop_b_fix["Total Bases"][3], prop_b_fix["H+R+RBI"][3]),
         full_row("4-Star",  gt_buckets_fix[4],  ml_b_fix[4],  rl_b_fix[4],  combo_b_fix[4],  tt_b_fix[4],
-                 prop_b_fix["SP Strikeouts"][4], prop_b_fix["Total Bases"][4], prop_b_fix["Home Run"][4], prop_b_fix["H+R+RBI"][4]),
+                 prop_b_fix["SP Strikeouts"][4], prop_b_fix["Total Bases"][4], prop_b_fix["H+R+RBI"][4]),
         full_row("5-Star",  gt_buckets_fix[5],  ml_b_fix[5],  rl_b_fix[5],  combo_b_fix[5],  tt_b_fix[5],
-                 prop_b_fix["SP Strikeouts"][5], prop_b_fix["Total Bases"][5], prop_b_fix["Home Run"][5], prop_b_fix["H+R+RBI"][5]),
+                 prop_b_fix["SP Strikeouts"][5], prop_b_fix["Total Bases"][5], prop_b_fix["H+R+RBI"][5]),
         full_row("All",     gt_official_fix,    ml_all_fix,   rl_all_fix,   combo_all_fix,   tt_all_fix,
-                 prop_all_fix["SP Strikeouts"], prop_all_fix["Total Bases"], prop_all_fix["Home Run"], prop_all_fix["H+R+RBI"]),
+                 prop_all_fix["SP Strikeouts"], prop_all_fix["Total Bases"], prop_all_fix["H+R+RBI"]),
         [""],
     ]
 
@@ -909,7 +908,7 @@ def rebuild_performance(gc):
             list(daily_tt.keys()) + [d for pt in PROP_TYPES for d in daily_props[pt]]),
         reverse=True
     )
-    # Header row — P/L label at col B of each section (col index 1, 8, 15, 22, 29, 36, 43, 50, 57)
+    # Header row — P/L label at col B of each section (col index 1, 8, 15, 22, 29, 36, 43, 50)
     pl_hdr = ["Date",
               "GT P/L (4★+)", "", "", "", "", "", "",
               "ML P/L (4★+)", "", "", "", "", "", "",
@@ -918,7 +917,6 @@ def rebuild_performance(gc):
               "TT P/L (4★+)", "", "", "", "", "", "",
               "SP K P/L (4★+)", "", "", "", "", "", "",
               "TB P/L (4★+)", "", "", "", "", "", "",
-              "HR P/L (4★+)", "", "", "", "", "", "",
               "H+R+RBI P/L (4★+)"]
     perf_rows.append(pl_hdr)
 
@@ -930,7 +928,6 @@ def rebuild_performance(gc):
         tt_pl   = round(daily_tt.get(d, 0.0), 3)
         spk_pl  = round(daily_props["SP Strikeouts"].get(d, 0.0), 3)
         tb_pl   = round(daily_props["Total Bases"].get(d, 0.0), 3)
-        hr_pl   = round(daily_props["Home Run"].get(d, 0.0), 3)
         hrr_pl  = round(daily_props["H+R+RBI"].get(d, 0.0), 3)
         perf_rows.append([
             d,
@@ -941,7 +938,6 @@ def rebuild_performance(gc):
             tt_pl,  "", "", "", "", "", "",
             spk_pl, "", "", "", "", "", "",
             tb_pl,  "", "", "", "", "", "",
-            hr_pl,  "", "", "", "", "", "",
             hrr_pl,
         ])
 
