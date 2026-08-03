@@ -533,7 +533,7 @@ def grade_gt_shadow(ws_gt_shadow, scores: dict, yesterday: str) -> int:
 
         game_label = row[c_game] if c_game is not None else ""
         game_key   = game_label.lower()
-        score_data = scores.get(game_key)
+        score_data = scores.get(game_key) or scores.get(expand_game_label(game_label))
         if not score_data:
             continue
 
