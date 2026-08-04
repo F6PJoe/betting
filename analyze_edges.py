@@ -1955,7 +1955,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                     park_factor, "", conf_label, conf_pct_str,
                     f"{round(edge_pct, 2)}%",
                     "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
-                    "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
+                    "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
                 ]
                 # Fill Time (ET) from game data
                 g_data = game_by_teams.get((home, away), {})
@@ -2403,7 +2403,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
             best["park_factor"], best["venue"], best["conf"], f"{conf_pct}%",
             "",
             "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
-            "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
+            "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
         ])
 
     # ── Build ML/RL Bet History rows (4+ star, has_sp, not Athletics home) ─────
@@ -2424,7 +2424,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
                 "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
-                "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
+                "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
             ])
         else:  # Run Line
             rl_bet_on = f"{abbrev(s['bet_team'])} -1.5"
@@ -2439,7 +2439,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
                 "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
-                "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
+                "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
             ])
 
     # ── Build ML/RL shadow rows from best-line-per-signal dict ──────────────
@@ -2581,9 +2581,9 @@ HISTORY_HEADER = [
     "Edge (runs)", "Away Score", "Home Score", "Actual Total",
     "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %",
     "Edge %",
-    "Closing Line", "CLV",            # populated by fetch_closing_lines.py
-    "PM Line", "PM Juice", "PM CLV%", # populated by 12:30 PM run
-    "EV Line", "EV Juice", "EV CLV%", # populated by 6:30 PM run
+    "Closing Line", "CLV",                  # populated by fetch_closing_lines.py
+    "12:30 Line", "12:30 Juice", "12:30 CLV%", # populated by 12:30 PM run
+    "6:30 Line",  "6:30 Juice",  "6:30 CLV%",  # populated by 6:30 PM run
 ]
 
 SHADOW_HEADER = [
@@ -2676,9 +2676,9 @@ def _clv_update_hist(ws_hist, fresh_rows, today):
     """
     hour = datetime.now().hour
     if hour < 15:  # 12:30 PM run
-        col_line, col_juice, col_clv = "PM Line", "PM Juice", "PM CLV%"
+        col_line, col_juice, col_clv = "12:30 Line", "12:30 Juice", "12:30 CLV%"
     else:           # 6:30 PM run
-        col_line, col_juice, col_clv = "EV Line", "EV Juice", "EV CLV%"
+        col_line, col_juice, col_clv = "6:30 Line", "6:30 Juice", "6:30 CLV%"
 
     ci = {h: i for i, h in enumerate(HISTORY_HEADER)}
 
@@ -2725,8 +2725,8 @@ def _clv_update_hist(ws_hist, fresh_rows, today):
     h_confpct_col = ci["Confidence %"]
 
     # CLV column indices that can hold misplaced data from a prior stale run
-    _clv_cols = [ci["PM Line"], ci["PM Juice"], ci["PM CLV%"],
-                 ci["EV Line"], ci["EV Juice"], ci["EV CLV%"]]
+    _clv_cols = [ci["12:30 Line"], ci["12:30 Juice"], ci["12:30 CLV%"],
+                 ci["6:30 Line"],  ci["6:30 Juice"],  ci["6:30 CLV%"]]
 
     matched = 0
     updated_rows = []
@@ -2762,7 +2762,8 @@ def _clv_update_hist(ws_hist, fresh_rows, today):
 
     ws_hist.delete_rows(min(today_row_nums), max(today_row_nums))
     ws_hist.insert_rows(updated_rows, row=2, value_input_option="USER_ENTERED")
-    print(f"  CLV update ({col_clv[:2]} slot): {matched}/{len(updated_rows)} rows matched")
+    slot_label = "12:30 PM" if col_clv.startswith("12") else "6:30 PM"
+    print(f"  CLV update ({slot_label} slot): {matched}/{len(updated_rows)} rows matched")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
