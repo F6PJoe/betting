@@ -1954,6 +1954,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                     "", "", "", "Pending", "",
                     park_factor, "", conf_label, conf_pct_str,
                     f"{round(edge_pct, 2)}%",
+                    "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
                 ]
                 # Fill Time (ET) from game data
                 g_data = game_by_teams.get((home, away), {})
@@ -2400,6 +2401,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
             "", "", "", "Pending", "",
             best["park_factor"], best["venue"], best["conf"], f"{conf_pct}%",
             "",
+            "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
         ])
 
     # ── Build ML/RL Bet History rows (4+ star, has_sp, not Athletics home) ─────
@@ -2419,6 +2421,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
+                "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
             ])
         else:  # Run Line
             rl_bet_on = f"{abbrev(s['bet_team'])} -1.5"
@@ -2432,6 +2435,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
+                "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
             ])
 
     # ── Build ML/RL shadow rows from best-line-per-signal dict ──────────────
@@ -2573,6 +2577,8 @@ HISTORY_HEADER = [
     "Edge (runs)", "Away Score", "Home Score", "Actual Total",
     "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %",
     "Edge %",
+    "PM Line", "PM Juice", "PM CLV%",
+    "EV Line", "EV Juice", "EV CLV%",
 ]
 
 SHADOW_HEADER = [
@@ -2655,6 +2661,85 @@ def today_already_in_shadow(ws_shadow) -> bool:
         return today in col[1:]
     except Exception:
         return False
+
+
+def _clv_update_hist(ws_hist, fresh_rows, today):
+    """Afternoon/evening runs: update PM or EV CLV columns in today's Bet History rows.
+
+    Positive CLV% = implied prob went UP from morning → market moved toward our bet
+    (sharps bet same direction, line got worse for later bettors) = we beat the line.
+    """
+    hour = datetime.now().hour
+    if hour < 15:  # 12:30 PM run
+        col_line, col_juice, col_clv = "PM Line", "PM Juice", "PM CLV%"
+    else:           # 6:30 PM run
+        col_line, col_juice, col_clv = "EV Line", "EV Juice", "EV CLV%"
+
+    ci = {h: i for i, h in enumerate(HISTORY_HEADER)}
+
+    def _bet_key(row):
+        game   = row[ci["Game"]]      if len(row) > ci["Game"]      else ""
+        btype  = row[ci["Bet Type"]]  if len(row) > ci["Bet Type"]  else ""
+        direc  = row[ci["Direction"]] if len(row) > ci["Direction"] else ""
+        bet_on = row[ci["Bet On"]]    if len(row) > ci["Bet On"]    else ""
+        team_tok = bet_on.split()[0] if btype == "Team Total" and bet_on else ""
+        return (game, btype, direc, team_tok)
+
+    def _parse_juice(s):
+        try:
+            return int(str(s).replace("+", "").replace("'", "").strip())
+        except (ValueError, TypeError):
+            return None
+
+    fresh_lookup = {}
+    for row in fresh_rows:
+        key      = _bet_key(row)
+        new_line  = row[ci["Book Line"]]  if len(row) > ci["Book Line"]  else ""
+        new_juice = row[ci["Book Juice"]] if len(row) > ci["Book Juice"] else ""
+        fresh_lookup[key] = (new_line, new_juice)
+
+    all_vals = ws_hist.get_all_values()
+    today_row_nums = [i + 1 for i, r in enumerate(all_vals)
+                      if i > 0 and r and r[0] == today]
+    if not today_row_nums:
+        print(f"  CLV update: no existing rows found for {today}")
+        return
+
+    n_cols = len(HISTORY_HEADER)
+    h_units_col   = ci["Units Bet"]
+    h_confpct_col = ci["Confidence %"]
+
+    matched = 0
+    updated_rows = []
+    for row_num in today_row_nums:
+        row = list(all_vals[row_num - 1]) + [""] * max(0, n_cols - len(all_vals[row_num - 1]))
+        key = _bet_key(row)
+        if key in fresh_lookup:
+            new_line, new_juice = fresh_lookup[key]
+            am_juice_int  = _parse_juice(row[ci["Book Juice"]])
+            new_juice_int = _parse_juice(new_juice)
+            if am_juice_int is not None and new_juice_int is not None:
+                am_impl  = american_to_implied(am_juice_int)
+                new_impl = american_to_implied(new_juice_int)
+                clv_str  = f"{(new_impl - am_impl) * 100:+.2f}%"
+            else:
+                clv_str = ""
+            row[ci[col_line]]  = new_line
+            row[ci[col_juice]] = new_juice
+            row[ci[col_clv]]   = clv_str
+            matched += 1
+        updated_rows.append(row)
+
+    def _sort_key(r):
+        u = float(r[h_units_col]) if r[h_units_col] else 0.0
+        try: c = float(str(r[h_confpct_col]).replace("%", ""))
+        except: c = 0.0
+        return (u, c)
+    updated_rows.sort(key=_sort_key, reverse=True)
+
+    ws_hist.delete_rows(min(today_row_nums), max(today_row_nums))
+    ws_hist.insert_rows(updated_rows, row=2, value_input_option="USER_ENTERED")
+    print(f"  CLV update ({col_clv[:2]} slot): {matched}/{len(updated_rows)} rows matched")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -2822,9 +2907,14 @@ def main():
     ws_hist = ws(gc, ODDS_SHEET_ID, "Bet History")
     if history_rows:
         already_in_hist = today_already_in_history(ws_hist)
-        if already_in_hist and not force:
+        hour = datetime.now().hour
+        if already_in_hist and force and hour >= 11:
+            # Afternoon/evening run: update PM/EV CLV columns only — preserve morning picks
+            _clv_update_hist(ws_hist, history_rows, today)
+        elif already_in_hist and not force:
             print("Bet History: today already exists — skipping snapshot (first-run protection)")
         else:
+            # First write of the day, OR morning force re-run (hour < 11)
             existing = ws_hist.get_all_values()
             if already_in_hist and force:
                 rows_to_delete = [i+1 for i, r in enumerate(existing)
@@ -2837,6 +2927,8 @@ def main():
             if not has_hist_header:
                 ws_hist.update([HISTORY_HEADER] + history_rows, value_input_option="USER_ENTERED")
             else:
+                if len(existing[0]) < len(HISTORY_HEADER):
+                    ws_hist.update("A1", [HISTORY_HEADER], value_input_option="USER_ENTERED")
                 h_units_col   = HISTORY_HEADER.index("Units Bet")
                 h_confpct_col = HISTORY_HEADER.index("Confidence %")
                 def _hist_sort_key(r):
