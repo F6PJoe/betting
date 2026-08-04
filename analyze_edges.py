@@ -938,10 +938,9 @@ TOTAL_SCALE = [
     # Recalibrated 2026-06-14: shifted thresholds up based on 48-game sample.
     # Data showed edge 1.0-1.5 was 7-11 (39%), edge 1.5+ was 14-7 (67%).
     # 4-star (Bet History minimum) now starts at 1.50 run edge (was 1.10).
-    # 5-star raised 2026-08-04: 18 5★ bets since 7/22 at 33.3% win rate (-4.6u)
-    # vs 14 4★ at 71.4% (+3.4u) — shift scale so 1.90-edge lands at 4★ not 5★.
+    # 5-star now starts at 1.90 run edge (was 1.50).
     (0.75, 0.3), (1.10, 0.4), (1.50, 0.5), (1.65, 0.6),
-    (1.90, 0.6), (2.05, 0.7), (2.20, 0.8), (2.40, 0.9),
+    (1.90, 0.7), (2.05, 0.8), (2.20, 0.9), (2.40, 1.0),
 ]
 # ── Moneyline & Run Line are tracked with SEPARATE scales as of 2026-06-21 ──────
 # They are different bets with measurably different edge distributions and different
@@ -1014,7 +1013,7 @@ HR_GAMES_RATIO = 4  # 1 HR bet allowed per this many games on slate
 LEAGUE_AVG_K_PCT        = 0.224   # MLB-wide K% per batter faced (~22.4%, 2024-25 avg)
 LEAGUE_AVG_BATTERS_PER_IP = 4.30  # average BF/IP across MLB starters
 EXPECTED_SP_IP          = 5.5     # expected innings for a typical SP start
-EXPECTED_PA_PER_GAME    = 3.5     # avg PA/game; reduced from 4.0 — corrects H+R+RBI over-projection bias (+0.27u avg)
+EXPECTED_PA_PER_GAME    = 3.2     # avg PA/game; reduced 4.0 → 3.5 → 3.2 to correct H+R+RBI/TB over-projection bias
 PA_TO_AB_RATIO          = 0.865   # AB/PA league average (excludes BB, HBP, SAC)
 LEAGUE_AVG_BARREL_PCT   = 8.5     # MLB-wide barrel rate %
 LEAGUE_AVG_ISO          = 0.165   # MLB-wide ISO (SLG - AVG)
@@ -1865,12 +1864,6 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             # Facing an elite starter (ERA 2.50) reduces expected H+R+RBI by ~20%.
             pitcher_adj = _pitcher_batter_adj(pitchers, b.get("team", ""), home, away)
             proj = proj * pitcher_adj
-            # Over-bias correction (2026-08-04): 4★ Overs were 41.2% win rate (-8.4u)
-            # vs 5★ Unders at 56.5% (+5.1u) since 7/22. Poisson model over-projects
-            # H+R+RBI for Overs (zero-heavy distribution bias). Apply 8% downward
-            # scalar specifically to Over projections to reduce phantom edge signals.
-            if direction == "Over":
-                proj = proj * 0.92
             implied = american_to_implied(price)
             our_prob = prop_win_prob(proj, line, direction)
             edge_pct = (our_prob - implied) / implied * 100 if implied > 0 else 0
@@ -1901,12 +1894,11 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             edge_pct = (proj - line) / line * 100 if line else 0
             if direction == "Under":
                 edge_pct = -edge_pct
-            # Over skepticism: TT Overs were 42.7% win rate vs 51.5% for Unders
-            # since 7/22 recalibration (124 bets, -7.1u). Reduce effective Over
-            # edge by 10% to dampen phantom Over signals.
-            if direction == "Over":
-                edge_pct *= 0.90
-            if edge_pct < 8.0:
+            # Direction-specific minimums: TT Overs require 20% edge vs 8% for Unders.
+            # TT Overs were 42.7% win rate (-7.1u) vs Unders 51.5% (+4.2u) since 7/22.
+            # Raising the Over floor ensures only high-conviction Over bets qualify.
+            tt_min = 20.0 if direction == "Over" else 8.0
+            if edge_pct < tt_min:
                 continue
             if edge_pct >= 50.0:  # hard cap — model is unreliable this far from the line
                 continue
