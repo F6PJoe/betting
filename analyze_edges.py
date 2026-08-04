@@ -1809,8 +1809,10 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             our_prob = tb_game_win_prob(adj_xba, adj_xslg, hr_per_pa, line, direction)
             edge_pct = (our_prob - implied) / implied * 100 if implied > 0 else 0
             # Both directions shadow-only: accumulate calibration data before live bets.
-            # Under was already shadow. Over added 2026-08-04: 30 Over bets at 33.3%
-            # win rate since 7/22 (-5.2u). Convolution model still over-projecting.
+            # Over: 30 bets at 33.3% (-5.2u) since 7/22 — convolution model still over-projecting.
+            # Under: 1,207 shadow bets at 60.1% win rate — strong signal but volume is ~90/day.
+            #   When enabling Unders: 5★ ONLY to control volume (user directive 2026-08-04).
+            #   Enable once Under sample confirms consistent profitability at 5★ level.
             proj = adj_xslg * EXPECTED_PA_PER_GAME
             prop_rows.append([
                 today, game_label, player, "Total Bases", direction,
