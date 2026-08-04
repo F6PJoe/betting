@@ -1954,6 +1954,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                     "", "", "", "Pending", "",
                     park_factor, "", conf_label, conf_pct_str,
                     f"{round(edge_pct, 2)}%",
+                    "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
                     "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
                 ]
                 # Fill Time (ET) from game data
@@ -2401,6 +2402,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
             "", "", "", "Pending", "",
             best["park_factor"], best["venue"], best["conf"], f"{conf_pct}%",
             "",
+            "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
             "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
         ])
 
@@ -2421,6 +2423,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
+                "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
                 "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
             ])
         else:  # Run Line
@@ -2435,6 +2438,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
+                "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
                 "", "", "", "", "", "",  # PM Line/Juice/CLV%, EV Line/Juice/CLV%
             ])
 
@@ -2577,8 +2581,9 @@ HISTORY_HEADER = [
     "Edge (runs)", "Away Score", "Home Score", "Actual Total",
     "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %",
     "Edge %",
-    "PM Line", "PM Juice", "PM CLV%",
-    "EV Line", "EV Juice", "EV CLV%",
+    "Closing Line", "CLV",            # populated by fetch_closing_lines.py
+    "PM Line", "PM Juice", "PM CLV%", # populated by 12:30 PM run
+    "EV Line", "EV Juice", "EV CLV%", # populated by 6:30 PM run
 ]
 
 SHADOW_HEADER = [
@@ -2677,6 +2682,16 @@ def _clv_update_hist(ws_hist, fresh_rows, today):
 
     ci = {h: i for i, h in enumerate(HISTORY_HEADER)}
 
+    # Update header row if stale (e.g. new CLV columns were added or reordered)
+    all_vals = ws_hist.get_all_values()
+    actual_header = all_vals[0] if all_vals else []
+    header_stale = (actual_header[:len(HISTORY_HEADER)] != HISTORY_HEADER)
+    if header_stale:
+        ws_hist.update("A1", [HISTORY_HEADER], value_input_option="USER_ENTERED")
+        # Re-fetch so row data reflects the same view as the updated header
+        all_vals = ws_hist.get_all_values()
+        print("  CLV update: header refreshed with new column names")
+
     def _bet_key(row):
         game   = row[ci["Game"]]      if len(row) > ci["Game"]      else ""
         btype  = row[ci["Bet Type"]]  if len(row) > ci["Bet Type"]  else ""
@@ -2709,10 +2724,18 @@ def _clv_update_hist(ws_hist, fresh_rows, today):
     h_units_col   = ci["Units Bet"]
     h_confpct_col = ci["Confidence %"]
 
+    # CLV column indices that can hold misplaced data from a prior stale run
+    _clv_cols = [ci["PM Line"], ci["PM Juice"], ci["PM CLV%"],
+                 ci["EV Line"], ci["EV Juice"], ci["EV CLV%"]]
+
     matched = 0
     updated_rows = []
     for row_num in today_row_nums:
         row = list(all_vals[row_num - 1]) + [""] * max(0, n_cols - len(all_vals[row_num - 1]))
+        # If header was stale, old CLV data landed in wrong columns — wipe all CLV positions
+        if header_stale:
+            for idx in _clv_cols:
+                row[idx] = ""
         key = _bet_key(row)
         if key in fresh_lookup:
             new_line, new_juice = fresh_lookup[key]
