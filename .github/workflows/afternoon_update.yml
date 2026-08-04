@@ -1,12 +1,13 @@
-name: MLB Morning Routine
+name: MLB Afternoon/Evening Update
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # 8:00 AM EDT (UTC-4); GitHub cron runs in UTC
-  workflow_dispatch:         # also allows manual trigger
+    - cron: '30 16 * * *'  # 12:30 PM EDT (UTC-4)
+    - cron: '30 22 * * *'  #  6:30 PM EDT (UTC-4)
+  workflow_dispatch:        # allows manual trigger
 
 env:
-  TZ: America/New_York      # so datetime.now() in Python returns Eastern time
+  TZ: America/New_York     # so datetime.now() in Python returns Eastern time
 
 jobs:
   run:
@@ -31,23 +32,11 @@ jobs:
       - name: Create .env file
         run: echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
 
-      - name: Grade yesterday's bets
-        run: python grade_bets.py
-
-      - name: Pause
-        run: sleep 30
-
-      - name: Fetch today's odds
+      - name: Fetch updated odds
         run: python fetch_odds.py
 
       - name: Pause
         run: sleep 30
 
-      - name: Analyze edges
-        run: python analyze_edges.py
-
-      - name: Pause
-        run: sleep 30
-
-      - name: Write to sheets
-        run: python write_sheets.py
+      - name: Update CLV snapshots
+        run: python analyze_edges.py --force

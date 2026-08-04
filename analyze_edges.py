@@ -2402,8 +2402,8 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
             "", "", "", "Pending", "",
             best["park_factor"], best["venue"], best["conf"], f"{conf_pct}%",
             "",
-            "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
             "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
+            "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
         ])
 
     # ── Build ML/RL Bet History rows (4+ star, has_sp, not Athletics home) ─────
@@ -2581,9 +2581,9 @@ HISTORY_HEADER = [
     "Edge (runs)", "Away Score", "Home Score", "Actual Total",
     "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %",
     "Edge %",
-    "Closing Line", "CLV",                  # populated by fetch_closing_lines.py
     "12:30 Line", "12:30 Juice", "12:30 CLV%", # populated by 12:30 PM run
     "6:30 Line",  "6:30 Juice",  "6:30 CLV%",  # populated by 6:30 PM run
+    "Closing Line", "CLV",                      # populated by fetch_closing_lines.py
 ]
 
 SHADOW_HEADER = [
@@ -2674,7 +2674,7 @@ def _clv_update_hist(ws_hist, fresh_rows, today):
     Positive CLV% = implied prob went UP from morning → market moved toward our bet
     (sharps bet same direction, line got worse for later bettors) = we beat the line.
     """
-    hour = datetime.now().hour
+    hour = datetime.now(EASTERN).hour
     if hour < 15:  # 12:30 PM run
         col_line, col_juice, col_clv = "12:30 Line", "12:30 Juice", "12:30 CLV%"
     else:           # 6:30 PM run
@@ -2931,7 +2931,7 @@ def main():
     ws_hist = ws(gc, ODDS_SHEET_ID, "Bet History")
     if history_rows:
         already_in_hist = today_already_in_history(ws_hist)
-        hour = datetime.now().hour
+        hour = datetime.now(EASTERN).hour
         if already_in_hist and force and hour >= 11:
             # Afternoon/evening run: update PM/EV CLV columns only — preserve morning picks
             _clv_update_hist(ws_hist, history_rows, today)
