@@ -938,13 +938,10 @@ TOTAL_SCALE = [
     # Recalibrated 2026-06-14: shifted thresholds up based on 48-game sample.
     # Data showed edge 1.0-1.5 was 7-11 (39%), edge 1.5+ was 14-7 (67%).
     # 4-star (Bet History minimum) now starts at 1.50 run edge (was 1.10).
-    # 5-star now starts at 1.90 run edge (was 1.50).
+    # 5-star raised 2026-08-04: 18 5★ bets since 7/22 at 33.3% win rate (-4.6u)
+    # vs 14 4★ at 71.4% (+3.4u) — shift scale so 1.90-edge lands at 4★ not 5★.
     (0.75, 0.3), (1.10, 0.4), (1.50, 0.5), (1.65, 0.6),
-    (1.90, 0.7), (2.05, 0.8), (2.20, 0.9), (2.40, 1.0),
-]
-TEAM_TOTAL_SCALE = [
-    (8.0, 0.3), (10.0, 0.4), (12.0, 0.5), (14.0, 0.6),
-    (16.0, 0.7), (18.0, 0.8), (20.0, 0.9), (22.0, 1.0),
+    (1.90, 0.6), (2.05, 0.7), (2.20, 0.8), (2.40, 0.9),
 ]
 # ── Moneyline & Run Line are tracked with SEPARATE scales as of 2026-06-21 ──────
 # They are different bets with measurably different edge distributions and different
@@ -1000,9 +997,11 @@ PROPS_HRR_SCALE = [
     (15.0, 0.7), (19.0, 0.8), (23.0, 0.9), (28.0, 1.0),
 ]
 TEAM_TOTAL_SCALE = [
-    # 3-star: 8-16% | 4-star: 16-30% | 5-star: 30-50% | hard cap at 50%
-    # Calibrated 2026-07-22 against 279 graded bets.
-    (8.0,  0.3), (12.0, 0.4),               # 3-star (TT tab only)
+    # 3-star eliminated 2026-08-04: 71 bets at 35.2% win rate (-7.9u) since 7/22.
+    # Minimum is now 4-star (16%+ edge). 3★ thresholds kept in scale for unit
+    # interpolation math but filtered out by the stars<4 gate below.
+    # Over skepticism (10% edge reduction) also added below for TT Overs.
+    (8.0,  0.3), (12.0, 0.4),               # 3-star (filtered out — below gate)
     (16.0, 0.5), (22.0, 0.6),               # 4-star (Edges + Bet History)
     (30.0, 0.7), (36.0, 0.8), (42.0, 0.9), (48.0, 1.0),  # 5-star
 ]
@@ -1810,26 +1809,20 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             # showed Poisson generated phantom 20-55% edges that lost badly.
             our_prob = tb_game_win_prob(adj_xba, adj_xslg, hr_per_pa, line, direction)
             edge_pct = (our_prob - implied) / implied * 100 if implied > 0 else 0
-            # Under: shadow-only until sufficient data confirms a profitable threshold.
-            # Keep computing and grading to accumulate calibration data.
-            if direction == "Under":
-                proj = adj_xslg * EXPECTED_PA_PER_GAME  # store expected TB for shadow
-                prop_rows.append([
-                    today, game_label, player, "Total Bases", direction,
-                    book.title(), line, price, round(proj, 2),
-                    f"{round(edge_pct, 2)}%",
-                    "—", 0,
-                    f"{round(our_prob * 100, 1)}%",
-                    "", "", "",
-                    run_now,
-                ])
-                continue
-            if edge_pct < 4.0:
-                continue
-            units = unit_scale(edge_pct, PROPS_TB_SCALE)
-            stars = stars_from_units(units)
-            prop_type = "Total Bases"
+            # Both directions shadow-only: accumulate calibration data before live bets.
+            # Under was already shadow. Over added 2026-08-04: 30 Over bets at 33.3%
+            # win rate since 7/22 (-5.2u). Convolution model still over-projecting.
             proj = adj_xslg * EXPECTED_PA_PER_GAME
+            prop_rows.append([
+                today, game_label, player, "Total Bases", direction,
+                book.title(), line, price, round(proj, 2),
+                f"{round(edge_pct, 2)}%",
+                "—", 0,
+                f"{round(our_prob * 100, 1)}%",
+                "", "", "",
+                run_now,
+            ])
+            continue
 
         # ── Batter Home Runs (shadow-only — market too efficient to bet) ────
         elif market == "batter_home_runs":
@@ -1872,6 +1865,12 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             # Facing an elite starter (ERA 2.50) reduces expected H+R+RBI by ~20%.
             pitcher_adj = _pitcher_batter_adj(pitchers, b.get("team", ""), home, away)
             proj = proj * pitcher_adj
+            # Over-bias correction (2026-08-04): 4★ Overs were 41.2% win rate (-8.4u)
+            # vs 5★ Unders at 56.5% (+5.1u) since 7/22. Poisson model over-projects
+            # H+R+RBI for Overs (zero-heavy distribution bias). Apply 8% downward
+            # scalar specifically to Over projections to reduce phantom edge signals.
+            if direction == "Over":
+                proj = proj * 0.92
             implied = american_to_implied(price)
             our_prob = prop_win_prob(proj, line, direction)
             edge_pct = (our_prob - implied) / implied * 100 if implied > 0 else 0
@@ -1902,6 +1901,11 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             edge_pct = (proj - line) / line * 100 if line else 0
             if direction == "Under":
                 edge_pct = -edge_pct
+            # Over skepticism: TT Overs were 42.7% win rate vs 51.5% for Unders
+            # since 7/22 recalibration (124 bets, -7.1u). Reduce effective Over
+            # edge by 10% to dampen phantom Over signals.
+            if direction == "Over":
+                edge_pct *= 0.90
             if edge_pct < 8.0:
                 continue
             if edge_pct >= 50.0:  # hard cap — model is unreliable this far from the line
@@ -1913,7 +1917,8 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
         else:
             continue
 
-        if prop_type == "Team Total" and stars < 3:
+        # TT minimum raised to 4★ (2026-08-04): 71 3★ bets were 35.2% win rate (-7.9u).
+        if prop_type == "Team Total" and stars < 4:
             continue
         elif prop_type != "Team Total" and stars < 4:
             continue
