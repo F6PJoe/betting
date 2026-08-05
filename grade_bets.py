@@ -199,11 +199,12 @@ def col(header: list, name: str) -> int:
 def grade_history(ws_hist, scores: dict, yesterday: str) -> int:
     all_vals = ws_hist.get_all_values()
     if len(all_vals) < 2:
-        return 0
+        return 0, [], [], []
 
     header  = all_vals[0]
     updates = []
     graded  = 0
+    yest_rows_count = 0  # how many Bet History rows exist for yesterday
 
     # Locate columns by name — works regardless of column order
     c_date      = col(header, "Date")
@@ -232,7 +233,10 @@ def grade_history(ws_hist, scores: dict, yesterday: str) -> int:
         bet_type  = row[c_bet_type].strip() if c_bet_type >= 0 else "Game Total"
         bet_on    = row[c_bet_on].strip() if c_bet_on >= 0 else ""
 
-        if date != yesterday or result in {"Win", "Loss", "Push"}:
+        if date != yesterday:
+            continue
+        yest_rows_count += 1
+        if result in {"Win", "Loss", "Push"}:
             continue
 
         # Game label may be abbreviated ("BAL @ BOS") — expand to full name for scores lookup
@@ -358,7 +362,7 @@ def grade_history(ws_hist, scores: dict, yesterday: str) -> int:
             {"range": f"R{r}C{u['c_units_res']}", "values": [[u["units_result"]]]},
         ], value_input_option="USER_ENTERED")
 
-    return graded, updates, all_vals[0], all_vals[1:]
+    return graded, updates, all_vals[0], all_vals[1:], yest_rows_count
 
 
 # ── Shadow tab grading ────────────────────────────────────────────────────────
@@ -1256,10 +1260,13 @@ def main():
             sheets_call(ws_hist.update, migrated, value_input_option="USER_ENTERED")
             print(f"  [migrated {count_old} old rows to current column format]")
 
-    graded_hist, hist_updates, hist_header, hist_rows = grade_history(ws_hist, scores, yesterday)
+    graded_hist, hist_updates, hist_header, hist_rows, hist_yest_count = grade_history(ws_hist, scores, yesterday)
     log(f"  {graded_hist} bets graded")
     if graded_hist == 0 and scores:
-        errors.append("Bet History: 0 bets graded despite having scores — check Pending rows")
+        if hist_yest_count == 0:
+            errors.append(f"Bet History: no rows found for {yesterday} — pipeline may not have run that day")
+        else:
+            log(f"  (all {hist_yest_count} rows for {yesterday} already graded)")
     if graded_hist > 0:
         # Re-read so results summary has the freshly-written scores/results
         _fresh = ws_hist.get_all_values()
