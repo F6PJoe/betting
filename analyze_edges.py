@@ -2330,14 +2330,19 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                         )
 
             # ── Run Lines ──────────────────────────────────────────────────
-            for side, our_pct, spread_key, price_key in [
-                ("Home", proj["home_rl_pct"], "rl_home_point", "rl_home_price"),
-                ("Away", proj["away_rl_pct"], "rl_away_point", "rl_away_price"),
+            for side, spread_key, price_key in [
+                ("Home", "rl_home_point", "rl_home_price"),
+                ("Away", "rl_away_point", "rl_away_price"),
             ]:
                 price  = bl.get(price_key)
                 spread = bl.get(spread_key)
                 if price is None or spread is None:
                     continue
+                # -1.5 favorite: P(wins by 2+). +1.5 underdog: P(doesn't lose by 2+).
+                if spread < 0:
+                    our_pct = proj["home_rl_pct"] if side == "Home" else proj["away_rl_pct"]
+                else:
+                    our_pct = (1.0 - proj["away_rl_pct"]) if side == "Home" else (1.0 - proj["home_rl_pct"])
                 implied  = american_to_implied(price)
                 edge_pct = (our_pct - implied) * 100
 
@@ -2427,7 +2432,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
             ])
         else:  # Run Line
-            rl_bet_on = f"{abbrev(s['bet_team'])} -1.5"
+            rl_bet_on = f"{abbrev(s['bet_team'])} {s['spread']:+.1f}"
             history_rows.append([
                 today, s["game_label"], s["time_et"],
                 s["away_sp"], s["home_sp"],
@@ -3006,23 +3011,20 @@ def main():
 
     ws_tt = ws(gc, ODDS_SHEET_ID, "Team Totals")
     if tt_rows:
-        existing_tt = ws_tt.get_all_values()
-        has_tt_header = existing_tt and existing_tt[0] and existing_tt[0][0] == "Date"
-        today_in_tt = any(r and r[0] == today for r in existing_tt[1:]) if existing_tt else False
-        if today_in_tt and not force:
-            print("Team Totals: today already exists — skipping (first-run protection)")
+        if force:
+            print("Team Totals: --force (CLV update) — skipping TT rewrite to preserve morning data")
         else:
-            if today_in_tt and force:
-                rows_to_del = [i+1 for i, r in enumerate(existing_tt) if i > 0 and r and r[0] == today]
-                if rows_to_del:
-                    ws_tt.delete_rows(min(rows_to_del), max(rows_to_del))
-                existing_tt = ws_tt.get_all_values()
-                print(f"  Force: deleted {len(rows_to_del)} existing Team Totals row(s) for today")
-            if not has_tt_header or not existing_tt:
-                ws_tt.update([TEAM_TOTAL_HEADER] + tt_rows, value_input_option="USER_ENTERED")
+            existing_tt = ws_tt.get_all_values()
+            has_tt_header = existing_tt and existing_tt[0] and existing_tt[0][0] == "Date"
+            today_in_tt = any(r and r[0] == today for r in existing_tt[1:]) if existing_tt else False
+            if today_in_tt:
+                print("Team Totals: today already exists — skipping (first-run protection)")
             else:
-                ws_tt.insert_rows(tt_rows, row=2, value_input_option="USER_ENTERED")
-            print(f"  Wrote {len(tt_rows)} rows to 'Team Totals' tab")
+                if not has_tt_header or not existing_tt:
+                    ws_tt.update([TEAM_TOTAL_HEADER] + tt_rows, value_input_option="USER_ENTERED")
+                else:
+                    ws_tt.insert_rows(tt_rows, row=2, value_input_option="USER_ENTERED")
+                print(f"  Wrote {len(tt_rows)} rows to 'Team Totals' tab")
     else:
         existing_tt = ws_tt.get_all_values()
         if not existing_tt or not existing_tt[0]:

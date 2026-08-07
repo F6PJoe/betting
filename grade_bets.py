@@ -620,10 +620,6 @@ def rebuild_performance(gc):
     ws_hist   = get_ws(gc, "Bet History")
     ws_shadow = get_ws(gc, "ML RL")
     try:
-        ws_tt = get_ws(gc, "Team Totals")
-    except Exception:
-        ws_tt = None
-    try:
         ws_props = get_ws(gc, "Player Props Shadow")
     except Exception:
         ws_props = None
@@ -659,10 +655,11 @@ def rebuild_performance(gc):
             if date >= MODEL_FIX_DATE_GT:
                 gt_buckets_fix[stars].append((stars, units, result))
 
-    # Daily P/L from official bets (4+ stars) — GT, ML, and RL separately
+    # Daily P/L from official bets (4+ stars) — GT, ML, RL, and TT from Bet History
     daily_gt = {}
     daily_ml_off = {}
     daily_rl_off = {}
+    daily_tt = {}
     c_btype = col(hh, "Bet Type")
     for row in hdata:
         while len(row) < len(hh): row.append("")
@@ -684,6 +681,8 @@ def rebuild_performance(gc):
             daily_ml_off[date] = daily_ml_off.get(date, 0.0) + u
         elif btype == "Run Line":
             daily_rl_off[date] = daily_rl_off.get(date, 0.0) + u
+        elif btype == "Team Total":
+            daily_tt[date] = daily_tt.get(date, 0.0) + u
 
     # ── ML / RL Shadow (excluding Missing SP rows) ────────────────────────────
     sh_rows = ws_shadow.get_all_values()
@@ -758,35 +757,27 @@ def rebuild_performance(gc):
     combo_b_fix     = {s: ml_b_fix[s] + rl_b_fix[s] for s in (3, 4, 5)}
     combo_all_fix   = ml_all_fix + rl_all_fix
 
-    # ── Team Totals (from Team Totals tab) ───────────────────────────────────
-    tt_all_rows = ws_tt.get_all_values() if ws_tt else []
-    tt_hdr  = tt_all_rows[0] if tt_all_rows else []
-    tt_data = tt_all_rows[1:] if len(tt_all_rows) > 1 else []
-
-    tc_date    = col(tt_hdr, "Date")
-    tc_stars   = col(tt_hdr, "Stars")
-    tc_result  = col(tt_hdr, "Result")
-    tc_units_r = col(tt_hdr, "Units Result")
-
+    # ── Team Totals (from Bet History — authoritative; daily_tt already built above) ───
     tt_b     = {3: [], 4: [], 5: []}
     tt_b_fix = {3: [], 4: [], 5: []}
-    daily_tt = {}
 
-    for trow in tt_data:
-        while len(trow) < len(tt_hdr): trow.append("")
-        result = trow[tc_result].strip() if tc_result >= 0 else ""
+    for row in hdata:
+        while len(row) < len(hh): row.append("")
+        btype = row[c_btype].strip() if c_btype >= 0 else ""
+        if btype != "Team Total":
+            continue
+        result = row[c_result].strip() if c_result >= 0 else ""
         if result not in ("Win", "Loss", "Push"):
             continue
-        date = trow[tc_date].strip() if tc_date >= 0 else ""
+        date = row[c_date] if c_date >= 0 else row[0]
         try:
-            stars = parse_stars(trow[tc_stars]) if tc_stars >= 0 else 0
-            u     = float(trow[tc_units_r]) if (tc_units_r >= 0 and trow[tc_units_r]) else 0.0
+            stars = parse_stars(row[c_stars]) if c_stars >= 0 else 0
+            u     = float(row[c_units_res]) if (c_units_res >= 0 and row[c_units_res]) else 0.0
         except (ValueError, TypeError):
             continue
         if stars not in (3, 4, 5):
             continue
         tt_b[stars].append((stars, u, result))
-        daily_tt[date] = daily_tt.get(date, 0.0) + u
         if date >= MODEL_FIX_DATE:
             tt_b_fix[stars].append((stars, u, result))
 
