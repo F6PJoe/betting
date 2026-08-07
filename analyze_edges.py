@@ -46,6 +46,38 @@ MAX_WIN_PCT      = 0.70
 MIN_WIN_PCT      = 0.30
 RUN_LINE_SD      = 4.49  # measured stdev of actual MLB run differentials (205 graded games, 2026-06-28); was a guessed 3.0
 
+# ── Team Total run model (rebuilt 2026-08-07) ─────────────────────────────────
+# The old TT edge was (proj - line) / line * 100, which had three defects:
+#   1. proj is a MEAN; the book sets the line near the MEDIAN. Measured across 550
+#      graded bets, actual team runs are mean 4.52 / median 4.00 — right-skewed
+#      (mode 3 runs, tail to 14+). Comparing our mean to their median handed us a
+#      +0.52-run phantom Over edge on every bet. TT Overs went 132W-143L (48.0%,
+#      +0.00u) across 275 bets — pure noise — while Unders, which had to overcome
+#      that bias to fire at all, went 53.8% / +19.00u.
+#   2. The projection is mostly noise at the team level. Regressing actual runs on
+#      our projection gives slope 0.360, corr 0.116. Over picks averaged proj 4.94
+#      and Under picks 3.51 (1.43-run spread) but their ACTUAL outcomes were 4.56
+#      vs 4.49 — a 0.07-run spread. Only ~36% of the deviation is real signal.
+#   3. Price was never in the formula. A "20% edge" at -180 and at +140 scored the
+#      same. Every other bet type compares our probability to the book's implied.
+# Fix: shrink the projection toward league mean, convert to a real probability with
+# a negative binomial, then compare to the book's implied probability.
+TT_SHRINK_SLOPE     = 0.360  # regression slope, actual ~ a + b*proj (550 graded bets)
+TT_SHRINK_INTERCEPT = 3.004  # regression intercept — together these pull proj toward 4.52
+TT_VAR_MEAN_RATIO   = 2.54   # measured variance/mean of actual team runs (Poisson would be 1.0).
+                             # NB at mu=4.52 reproduces mean 4.52 / var 11.46 vs observed 4.52 / 11.47.
+TT_MIN_EDGE_PTS     = 3.0    # minimum edge in probability POINTS (not % difference).
+                             # Backtest at >=3: 105W-87L (54.7%), +15.30u, and the
+                             # 7/22-8/3 collapse window flips from -2.90u to +5.50u.
+TT_MAX_EDGE_PTS     = 25.0   # sanity cap — max observed across 550 bets was +19.6.
+                             # Anything past this means bad line/price data, not an edge.
+TT_EDGE_SCALE_DATE  = "2026-08-07"  # date the TT edge unit changed from (proj-line)/line %
+                             # to probability points. Rows before this are on the old scale
+                             # and must NOT feed the confidence percentile — an old 30% edge
+                             # and a new +30pt edge are unrelated quantities.
+TT_MIN_HIST_FOR_CONF = 30    # need this many post-rescale rows before percentile confidence
+                             # is meaningful; below it we show the star label instead.
+
 TEAM_ABBREV = {
     "ARI": "Arizona Diamondbacks", "ATH": "Athletics", "ATL": "Atlanta Braves",
     "BAL": "Baltimore Orioles",    "BOS": "Boston Red Sox",  "CHC": "Chicago Cubs",
@@ -899,6 +931,13 @@ def load_historical_edges(gc) -> dict:
                     continue
                 if ti.get("Result") is not None and r[ti["Result"]].strip() not in ("Win", "Loss", "Push"):
                     continue
+                # Only rows written under the current edge unit. The TT edge changed
+                # from (proj-line)/line % to probability points on TT_EDGE_SCALE_DATE;
+                # mixing the two would rank every new bet against a distribution it
+                # shares no units with and report near-0% confidence on good bets.
+                row_date = r[ti["Date"]].strip() if ti.get("Date") is not None and len(r) > ti["Date"] else ""
+                if row_date < TT_EDGE_SCALE_DATE:
+                    continue
                 try:
                     history["Team Total"].append(float(str(r[ti["Edge %"]]).replace("%", "")))
                 except (ValueError, TypeError, KeyError, IndexError):
@@ -996,13 +1035,23 @@ PROPS_HRR_SCALE = [
     (15.0, 0.7), (19.0, 0.8), (23.0, 0.9), (28.0, 1.0),
 ]
 TEAM_TOTAL_SCALE = [
-    # 3-star eliminated 2026-08-04: 71 bets at 35.2% win rate (-7.9u) since 7/22.
-    # Minimum is now 4-star (16%+ edge). 3★ thresholds kept in scale for unit
-    # interpolation math but filtered out by the stars<4 gate below.
-    # Over skepticism (10% edge reduction) also added below for TT Overs.
-    (8.0,  0.3), (12.0, 0.4),               # 3-star (filtered out — below gate)
-    (16.0, 0.5), (22.0, 0.6),               # 4-star (Edges + Bet History)
-    (30.0, 0.7), (36.0, 0.8), (42.0, 0.9), (48.0, 1.0),  # 5-star
+    # Rebuilt 2026-08-07 for the new edge unit. Edge is now PROBABILITY POINTS
+    # (our NB win prob minus the book's implied), not the old (proj-line)/line %.
+    # Old thresholds (8-48) are meaningless on this scale — observed range across
+    # 550 graded bets is -18.1 to +19.6, median +0.5, p75 +4.5.
+    # unit_scale() rounds to 1 decimal, so a star tier flips at the MIDPOINT of the
+    # two surrounding anchors — anchors below are chosen with that in mind.
+    #   4★ fires at +3.0 pts  = midpoint of (2.0, 0.4) and (4.0, 0.5)
+    #   5★ fires at +9.0 pts  = midpoint of (6.0, 0.6) and (12.0, 0.7)
+    # Backtest support: >=+3 pts went 105W-87L (54.7%, +15.30u); the +9-and-up
+    # band went 27W-15L (64.3%, +9.70u, n=42).
+    # Top end is deliberately stretched — max observed edge was +19.6, so 0.9/1.0u
+    # almost never fires. Same reasoning as RL_SCALE: past the point where the data
+    # is thick, don't pretend to rank within "rare and exceptional."
+    (0.0,  0.3), (2.0,  0.4),               # below the 4★ gate — filtered out
+    (4.0,  0.5), (6.0,  0.6),               # 4★ band: +3 to +9 pts
+    (12.0, 0.7), (15.0, 0.8),               # 5★ band: +9 pts and up
+    (18.0, 0.9), (21.0, 1.0),
 ]
 # HR props: capped at 4 stars, max 0.2u regardless of edge, max 1 per 4 games
 HR_MAX_UNITS  = 0.2
@@ -1027,6 +1076,53 @@ def stars_from_units(units: float) -> int:
     if units >= 0.3:
         return 3
     return 0
+
+
+def tt_shrink_proj(proj: float) -> float:
+    """
+    Pull a raw team-runs projection toward the league mean.
+
+    Our raw projection carries far more spread than reality does: across 550 graded
+    bets, Over picks averaged proj 4.94 and Under picks 3.51, but their actual
+    outcomes were 4.56 and 4.49. Regressing actual on projected gives slope 0.360
+    (corr 0.116), so only ~36% of the deviation from average is real signal.
+    Betting the unshrunk projection means betting confidently on noise.
+    """
+    return TT_SHRINK_INTERCEPT + TT_SHRINK_SLOPE * proj
+
+
+def tt_run_pmf(mu: float, max_runs: int = 30) -> list[float]:
+    """
+    Negative binomial PMF for team runs in a game, with mean mu and
+    variance TT_VAR_MEAN_RATIO * mu.
+
+    Poisson is wrong here: measured variance/mean across actual team scores is 2.54,
+    so runs are heavily overdispersed (one big inning produces a 7-run game). NB is
+    the standard fit for that. Validated at mu=4.52: this returns mean 4.52 /
+    variance 11.46 against an observed 4.52 / 11.47.
+    """
+    if mu <= 0:
+        return [1.0] + [0.0] * max_runs
+    r = mu / (TT_VAR_MEAN_RATIO - 1.0)
+    p = r / (r + mu)
+    out, term = [], p ** r          # term = P(X = 0)
+    for x in range(max_runs + 1):
+        out.append(term)
+        term = term * (r + x) / (x + 1) * (1 - p)
+    total = sum(out)
+    return [v / total for v in out] if total > 0 else [1.0] + [0.0] * max_runs
+
+
+def tt_win_prob(mu: float, line: float, direction: str) -> float:
+    """
+    P(team runs beat `line`) under the NB run model.
+
+    Team total lines are always X.5, so there is no push. Guarding the .0 case
+    anyway by treating the line as strict: Over needs runs > line.
+    """
+    pmf = tt_run_pmf(mu)
+    over = sum(pmf[int(math.floor(line)) + 1:])
+    return over if direction == "Over" else 1.0 - over
 
 def poisson_cdf(k: int, lam: float) -> float:
     """P(X <= k) for Poisson(lam). Uses math to avoid scipy dependency."""
@@ -1893,16 +1989,36 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                 proj = gp["proj_away"]
             else:
                 continue
-            edge_pct = (proj - line) / line * 100 if line else 0
-            if direction == "Under":
-                edge_pct = -edge_pct
-            # Direction-specific minimums: TT Overs require 20% edge vs 8% for Unders.
-            # TT Overs were 42.7% win rate (-7.1u) vs Unders 51.5% (+4.2u) since 7/22.
-            # Raising the Over floor ensures only high-conviction Over bets qualify.
-            tt_min = 20.0 if direction == "Over" else 8.0
-            if edge_pct < tt_min:
+            # Shrink the raw projection toward league mean, convert to a real
+            # probability with the NB run model, then compare to the book's implied
+            # probability — the same shape as every other bet type in this file.
+            # Replaces (proj - line) / line * 100, which compared our MEAN to a line
+            # the book sets near the MEDIAN and ignored the price entirely. See the
+            # TT_* constants at the top for the full diagnosis.
+            if not line or price is None:
                 continue
-            if edge_pct >= 50.0:  # hard cap — model is unreliable this far from the line
+            mu       = tt_shrink_proj(proj)
+            our_prob = tt_win_prob(mu, line, direction)
+            implied  = american_to_implied(price)
+            # Display the SHRUNK projection, not the raw one. The shrunk value is what
+            # prices the bet, so showing the raw number would put a projection on the
+            # sheet that disagrees with the edge next to it.
+            # WARNING for future recalibration: the "Our Projection" column is shrunk
+            # from 2026-08-07 onward. Re-fitting TT_SHRINK_SLOPE by regressing actual
+            # runs on that column will return a slope near 1.0 and look like no
+            # shrinkage is needed — which would silently undo this fix. To re-fit,
+            # either invert with (col - TT_SHRINK_INTERCEPT) / TT_SHRINK_SLOPE first,
+            # or fit on rows before this date.
+            proj = mu
+            # Edge is now in probability POINTS, not a percentage difference.
+            edge_pct = (our_prob - implied) * 100
+            # One floor for both directions. The old code needed a 20% Over floor vs
+            # 8% for Unders purely to suppress the mean-vs-median bias; with that bias
+            # gone the two sides perform the same (at >=+3 pts: Overs 54.8%, Unders
+            # 54.7%), so a split floor would now just over-filter Overs.
+            if edge_pct < TT_MIN_EDGE_PTS:
+                continue
+            if edge_pct >= TT_MAX_EDGE_PTS:  # bad line/price data, not a real edge
                 continue
             units = unit_scale(edge_pct, TEAM_TOTAL_SCALE)
             stars = stars_from_units(units)
@@ -1911,15 +2027,19 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
         else:
             continue
 
-        # TT minimum raised to 4★ (2026-08-04): 71 3★ bets were 35.2% win rate (-7.9u).
-        if prop_type == "Team Total" and stars < 4:
-            continue
-        elif prop_type != "Team Total" and stars < 4:
+        # 4★ minimum for everything. TT was briefly allowed down to 3★ on 2026-07-22;
+        # those 71 bets went 35.2% (-7.9u) and the floor was restored 2026-08-04.
+        # Under the rebuilt TT scale, 4★ corresponds to +3.0 probability points.
+        if stars < 4:
             continue
 
         implied = american_to_implied(price)
         hist = (historical_edges or {})
         tt_hist = hist.get("Team Total", []) if prop_type == "Team Total" else []
+        # Percentile confidence needs a real post-rescale sample behind it; until then
+        # the star label is the honest answer rather than a percentile off ~5 rows.
+        if len(tt_hist) < TT_MIN_HIST_FOR_CONF:
+            tt_hist = []
         if tt_hist:
             conf_pct = confidence_percentile(edge_pct, tt_hist)
             conf_label = "High" if stars == 5 else "Medium" if stars == 4 else "Standard"

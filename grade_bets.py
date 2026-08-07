@@ -604,6 +604,11 @@ MODEL_FIX_DATE       = "2026-07-22"  # Full recalibration: ML shrinkage, RL 12-2
                                      # SP K caps, H+R+RBI edge caps + PA reduction, TB convolution model.
                                      # All prior data excluded — too many overlapping changes to isolate signal.
 MODEL_FIX_DATE_GT    = "2026-07-22"  # Same reset date — GT Under floor corrected back to 15% from 20%
+TT_RESCALE_DATE      = "2026-08-07"  # Team Total edge rebuilt: shrunk projection -> negative binomial
+                                     # P(runs > line) -> vs book implied probability. Edge unit changed
+                                     # from (proj-line)/line % to probability points, so star tiers before
+                                     # this date mean something different and can't be pooled with rows
+                                     # after it. Must match TT_EDGE_SCALE_DATE in analyze_edges.py.
 PROPS_MODEL_START    = "2026-07-22"  # TB convolution model, SP K / H+R+RBI edge caps all live this date
 PROPS_MODEL_START_BY_TYPE = {
     "Total Bases": "2026-07-22",   # Convolution model replaces Poisson; Under shadow-only
@@ -1641,7 +1646,11 @@ def check_team_total_star_calibration(gc, ws_tt):
     FIRST_THRESHOLD   = 60
     INCREMENT         = 30
     REQUIRED_STREAK   = 2
-    METRIC_NAME       = "Team Total Star Tier"
+    # Metric renamed on the 2026-08-07 TT rescale so this starts a FRESH row in the
+    # Calibration Tracker. The old row kept its own stored threshold (~580 by then);
+    # reusing the name would have made this check wait for 580 new-scale bets before
+    # firing again. New name -> no existing row -> restarts at FIRST_THRESHOLD.
+    METRIC_NAME       = "Team Total Star Tier (prob-edge)"
     MIN_SAMPLE_PER_TIER = 15  # need at least this many per tier to draw conclusions
 
     ws_calib = get_or_create_ws(gc, "Calibration Tracker")
@@ -1685,6 +1694,12 @@ def check_team_total_star_calibration(gc, ws_tt):
             continue
         result = r[sci[result_col]] if sci.get(result_col) is not None else ""
         if result not in ("Win", "Loss", "Push"):
+            continue
+        # Post-rescale rows only. A 5★ under the old (proj-line)/line % scale and a 5★
+        # under the probability-point scale are not the same bet, so pooling them would
+        # bury any new-scale signal under 550 rows of old-scale history.
+        row_date = r[sci["Date"]].strip() if sci.get("Date") is not None and len(r) > sci["Date"] else ""
+        if row_date < TT_RESCALE_DATE:
             continue
         stars_raw = r[sci[stars_col]] if sci.get(stars_col) is not None else ""
         star_count = stars_raw.count("⭐") if stars_raw else 0
