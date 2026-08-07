@@ -981,29 +981,41 @@ TOTAL_SCALE = [
     (0.75, 0.3), (1.10, 0.4), (1.50, 0.5), (1.65, 0.6),
     (1.90, 0.7), (2.05, 0.8), (2.20, 0.9), (2.40, 1.0),
 ]
-# GT 5-star suspended 2026-08-07. Measured across 155 graded GT bets:
-#     4-star  42W-31L  (57.5%)  +7.24u
-#     5-star  28W-34L  (45.2%)  -5.38u
-# The top conviction tier loses money, and the mechanism is confirmed by run-edge
-# band: 1.5-2.0 runs returns +5.74u, 2.0-2.5 runs -0.88u, 2.5+ runs 16.7% / -4.00u.
-# Bigger claimed edge, worse result — the signature of phantom edges, same defect
-# found in Team Totals (our MEAN projection vs a line the book sets near the
-# MEDIAN; actual game totals are mean 9.25 / median 8.00, a +1.25-run skew).
+# ── GT conviction tiers COLLAPSED 2026-08-07 ─────────────────────────────────
+# GT star ratings are derived from |projection - line|. That is only a conviction
+# measure if the projection carries signal, and it does not:
+#   corr(our proj, actual) 0.187 vs corr(book line, actual) 0.274
+#   blend weight on our projection, fit honestly on train: w = 0.00
+#   four separate repairs all failed out-of-sample — the TT-style probability
+#   rewrite, eight input re-weightings, confirmed lineups (258 games), and
+#   skipping clamped projections (which would have COST 2.4u)
+# So a GT star rating is not measuring conviction, it is measuring how far a noisy
+# instrument drifted from the line. Splitting on it is arbitrary in either
+# direction, so the tiers are collapsed rather than split.
 #
-# NOTE: the TT-style probability rewrite was built and REJECTED for GT on evidence.
-# Out-of-sample (fit on first 70% of games, applied to the unseen last 30%) the
-# filter lost money on the training period at every threshold (-3.48u at its best)
-# and only "won" on a test period whose unfiltered baseline was already +6.40u —
-# it tracks the period rather than adding edge. Root cause: the GT projection is
-# worse than the line it bets into. corr(our proj, actual)=0.187 vs corr(book
-# line, actual)=0.274, and our projection adds just +0.0027 R^2 beyond the line.
-# Rewriting the edge math around a projection that weak only rearranges bad bets.
-# The real fix is rebuilding the projection itself — see project_tt_edge_rebuild.
+# 5-star was briefly suspended earlier today on a 4* 57.5% vs 5* 45.2% comparison.
+# That split does not survive testing — two-proportion z = 1.43, p = 0.152, so the
+# tiers are statistically indistinguishable. Worse, NEITHER tier is distinguishable
+# from a coin flip (4* p = 0.090, 5* p = 0.698, all GT p = 0.325 vs the 52.38%
+# break-even), so suspending one and keeping the other was fitting to noise.
+# Confirming the observed 12.4pp gap would need ~255 bets per tier against the 73
+# and 62 we have — at 2.3 GT bets/day that is over a year, so this is not
+# settleable by waiting either.
 #
-# Sizing down instead of stopping was considered and rejected: 45.2% is below
-# break-even at ANY stake. 5-star GT continues to be logged to the Game Totals
-# shadow tab so the tier keeps accruing data and can be reinstated if it turns.
-GT_MAX_STARS = 4
+# What survives: win rate does decay as claimed edge rises (1.5-2.0 runs 55.1%,
+# 2.0-2.5 47.8%, 2.5+ 16.7%; permutation p = 0.039 over 107 bets). Held loosely —
+# the extreme bucket is 6 games. It is the reason the stake is small, not a reason
+# to re-split the tiers under a different name.
+#
+# Every qualifying GT bet is therefore published at one flat stake. 0.25u is
+# deliberately below the 0.3u floor of every unit scale in this file: those scales
+# express conviction tiers, and GT has none to express. It is sized to keep the bet
+# type live and accruing data, not because it is believed +EV.
+# Revisit when the Line History market test runs (early Sept) — see
+# capture_line_history() and project_gt_projection_rebuild.
+GT_FLAT_UNITS = 0.25
+GT_FLAT_STARS = 4     # uniform label; 4 keeps GT flowing through the 4-star-minimum
+                      # gates used by Bet History, the Edges tab and the cheatsheet.
 # ── Moneyline & Run Line are tracked with SEPARATE scales as of 2026-06-21 ──────
 # They are different bets with measurably different edge distributions and different
 # current performance (Moneyline: median edge 9.1%, currently -0.064 ROI/bet, 45.9% win
@@ -1476,7 +1488,7 @@ def load_prop_odds(gc) -> list[dict]:
 # spread is destroyed as soon as the next run starts. That spread is the thing we
 # need: four books priced the same 2026-08-07 game at 8.0 and 8.5, and capturing a
 # stale book requires no projection edge at all — which matters because the GT
-# projection provably has none (see GT_MAX_STARS and gt_projection_audit.py; four
+# projection provably has none (see GT_FLAT_UNITS and gt_projection_audit.py; four
 # separate repairs all failed out-of-sample).
 #
 # This tab is APPEND-ONLY and runs on every pass (8:00 / 12:30 / 6:30), so it
@@ -2390,10 +2402,14 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 abs_edge  = abs(edge)
 
                 if abs_edge >= 0.75:
-                    units = unit_scale(abs_edge, TOTAL_SCALE)
-                    stars = stars_from_units(units)
+                    # Tiers collapsed — see GT_FLAT_UNITS. scale_stars is retained
+                    # only to drive the qualification threshold below (>= 4 on the
+                    # old scale == 1.5+ runs of edge); it is never published.
+                    scale_stars = stars_from_units(unit_scale(abs_edge, TOTAL_SCALE))
+                    units = GT_FLAT_UNITS
+                    stars = GT_FLAT_STARS
                     juice = bl.get("total_over_price") if direction == "Over" else bl.get("total_under_price")
-                    conf  = "High" if stars == 5 else "Medium" if stars == 4 else "Standard"
+                    conf  = "Standard"   # uniform: GT has no conviction tiers
 
                     edge_pct_of_line = (abs_edge / t_line * 100) if t_line else 0.0
                     conf_pct = confidence_percentile(edge_pct_of_line, historical_edges["Game Total"])
@@ -2409,8 +2425,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     ]
                     # Calibrated minimum: below 15% edge GT bets lose money regardless of direction
                     # Data (309 bets): <15% = 75W/84L (47.2%, -5.46u); 15%+ = 81W/59L (57.9%, +13.30u)
-                    # 5-star suspended 2026-08-07 (45.2%, -5.38u) — see GT_MAX_STARS.
-                    if edge_pct_of_line >= 15.0 and stars <= GT_MAX_STARS:
+                    # No upper star cap — tiers are collapsed (see GT_FLAT_UNITS), so what
+                    # would have been a 5-star bet now publishes at the same flat stake.
+                    if edge_pct_of_line >= 15.0 and scale_stars >= 4:
                         edge_rows.append(edge_row)
 
                     # Track best per game (for snapshot — only if SP known)
@@ -2420,9 +2437,10 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     # 15-20% Under: 18W/11L (62.1%, +5.22u) — prior 20% floor was cutting good bets.
                     min_pct = 15.0
                     athletics_home = (home == "Athletics")
-                    # stars capped at GT_MAX_STARS — 5-star GT is suspended (45.2%, -5.38u).
-                    # The GT Shadow tab above still records every star level for calibration.
-                    if (has_sp and 4 <= stars <= GT_MAX_STARS and not athletics_home
+                    # Qualification uses scale_stars (the pre-collapse tier) purely as the
+                    # 1.5-runs-of-edge threshold. No upper cap — tiers are collapsed, so
+                    # former 5-star bets qualify at the same flat stake as former 4-star.
+                    if (has_sp and scale_stars >= 4 and not athletics_home
                             and edge_pct_of_line >= min_pct):
                         prev = best_total_per_game.get(gid)
                         if prev is None:

@@ -280,9 +280,23 @@ def _juice_ok(odds_str):
 
 for row in today_bets:
     btype = hv(row, hc_btype)
-    if btype in ("Team Total", "Run Line"):
-        continue  # TT from Team Totals tab; RL excluded from cheatsheet
-    # GT and ML: require 4★+ AND 85%+ confidence
+    # TT comes from the Team Totals tab; RL is excluded.
+    # Game Total dropped from the cheatsheet 2026-08-07. GT is selected here by
+    # Confidence %, which is the percentile rank of "Edge % of Line" — the SAME
+    # edge-magnitude measure the star tiers came from. That is only a quality
+    # signal if the projection has signal, and it does not (corr 0.187 vs the book
+    # line's 0.274; four repairs failed out-of-sample). Worse, GT win rate DECAYS
+    # as claimed edge rises (1.5-2.0 runs 55.1%, 2.0-2.5 47.8%, 2.5+ 16.7%;
+    # permutation p=0.039), so gating on the top 15% of edges actively selected the
+    # worst bets: 30 of the 36 GT bets that reached the cheatsheet were the largest
+    # -edge tier at 43.3%.
+    # GT still publishes to Edges and Bet History at the flat GT_FLAT_UNITS stake,
+    # so it stays in the product and keeps accruing data — it is just off the
+    # curated list until it demonstrates an edge. Revisit after the Line History
+    # market test (early Sept) — see capture_line_history() in analyze_edges.py.
+    if btype in ("Team Total", "Run Line", "Game Total"):
+        continue
+    # Moneyline: require 4★+ AND 85%+ confidence
     try:
         conf_val = float(str(hv(row, hc_conf)).replace("%", ""))
     except:
