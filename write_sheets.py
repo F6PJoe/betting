@@ -222,7 +222,7 @@ def tt_sort_key(row):
 
 _all_today_tt = [r for r in tt_data
                  if tv(r, tc_date) == today
-                 and str(tv(r, tc_stars)).count("⭐") >= 4]
+                 and str(tv(r, tc_stars)).count("⭐") >= 5]
 # Deduplicate to best-juice book per (team, direction) — same logic as Edges tab
 def _tt_juice_val(row):
     try: return _parse_odds_str(tv(row, tc_juice))
@@ -279,8 +279,16 @@ def _juice_ok(odds_str):
         return True
 
 for row in today_bets:
-    if hv(row, hc_btype) == "Team Total":
-        continue  # TT bets come from Team Totals tab (avoid double-counting)
+    btype = hv(row, hc_btype)
+    if btype in ("Team Total", "Run Line"):
+        continue  # TT from Team Totals tab; RL excluded from cheatsheet
+    # GT and ML: require 4★+ AND 85%+ confidence
+    try:
+        conf_val = float(str(hv(row, hc_conf)).replace("%", ""))
+    except:
+        conf_val = 0.0
+    if conf_val < 85:
+        continue
     juice_str = hv(row, hc_juice) or hv(row, hc_dkjuice)
     if not _juice_ok(juice_str):
         continue
