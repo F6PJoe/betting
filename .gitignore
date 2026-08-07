@@ -2,6 +2,12 @@
 google_credentials.json
 .env
 
+# Machine-local Claude Code settings. Accumulates OAuth tokens at runtime —
+# GitHub push protection blocked a push on 2026-08-07 when it was staged by
+# mistake. Only the token-free 21-line version was ever pushed (initial commit);
+# untracked from here on so a live token can never reach the remote.
+.claude/settings.local.json
+
 # Python
 __pycache__/
 *.pyc
