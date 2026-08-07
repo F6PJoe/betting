@@ -2493,7 +2493,19 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
             run_now,
         ])
 
-    return edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections
+    # Build comprehensive CLV lines lookup (ALL evaluated bets, not just edges).
+    # Used by _clv_update_hist so afternoon runs can populate CLV columns even
+    # when a morning pick no longer has an edge at 12:30/6:30.
+    clv_lines = {}
+    for (gid, direction), g in best_gt_shadow_per_game_dir.items():
+        key = (g["game_label"], "Game Total", direction, "")
+        clv_lines[key] = (str(g["t_line"]), str(g["juice"]))
+    for (gid, btype, side), s in best_shadow_per_signal.items():
+        line_val = s.get("spread")
+        key = (s["game_label"], btype, side, "")
+        clv_lines[key] = ("" if line_val is None else str(line_val), str(s["price"]))
+
+    return edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections, clv_lines
 
 
 def _shadow_row(
@@ -2673,11 +2685,15 @@ def today_already_in_shadow(ws_shadow) -> bool:
         return False
 
 
-def _clv_update_hist(ws_hist, fresh_rows, today):
+def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     """Afternoon/evening runs: update PM or EV CLV columns in today's Bet History rows.
 
     Positive CLV% = implied prob went UP from morning → market moved toward our bet
     (sharps bet same direction, line got worse for later bettors) = we beat the line.
+
+    clv_lines: comprehensive {(game_label, btype, direction, team_tok): (line, juice)}
+    lookup built from ALL evaluated bets (not just edge picks). Allows CLV to be
+    populated even when a morning pick no longer has an edge at the update time.
     """
     hour = datetime.now(EASTERN).hour
     if hour < 15:  # 12:30 PM run
@@ -2742,8 +2758,11 @@ def _clv_update_hist(ws_hist, fresh_rows, today):
             for idx in _clv_cols:
                 row[idx] = ""
         key = _bet_key(row)
-        if key in fresh_lookup:
-            new_line, new_juice = fresh_lookup[key]
+        # Prefer the comprehensive all-lines lookup (covers bets that lost their edge);
+        # fall back to edge-only fresh_lookup if clv_lines not available.
+        all_lines = clv_lines or {}
+        if key in all_lines or key in fresh_lookup:
+            new_line, new_juice = all_lines[key] if key in all_lines else fresh_lookup[key]
             am_juice_int  = _parse_juice(row[ci["Book Juice"]])
             new_juice_int = _parse_juice(new_juice)
             if am_juice_int is not None and new_juice_int is not None:
@@ -2854,7 +2873,7 @@ def main():
 
     print("\nRunning edge analysis ...")
     historical_edges = load_historical_edges(gc)
-    edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections = analyze(
+    edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections, clv_lines = analyze(
         games, book_lines, pitchers, offense, run_now, special_games,
         bullpen_eras=bullpen_eras, ump_map=ump_map,
         sp_profiles=sp_profiles, batting_splits=batting_splits,
@@ -2932,6 +2951,19 @@ def main():
     edge_rows.extend(tt_edge_rows)
     history_rows.extend(tt_rows_for_history)
 
+    # Add TT lines to comprehensive CLV lookup (uses TEAM_TOTAL_HEADER column positions)
+    tt_ci = {h: i for i, h in enumerate(TEAM_TOTAL_HEADER)}
+    for trow in tt_rows:
+        if not trow:
+            continue
+        tt_game   = trow[tt_ci["Game"]]       if len(trow) > tt_ci["Game"]       else ""
+        tt_team   = trow[tt_ci["Team"]]       if len(trow) > tt_ci["Team"]       else ""
+        tt_dir    = trow[tt_ci["Direction"]]  if len(trow) > tt_ci["Direction"]  else ""
+        tt_line   = trow[tt_ci["Book Line"]]  if len(trow) > tt_ci["Book Line"]  else ""
+        tt_juice  = trow[tt_ci["Book Juice"]] if len(trow) > tt_ci["Book Juice"] else ""
+        tt_tok    = abbrev(tt_team) if tt_team else ""
+        clv_lines[(tt_game, "Team Total", tt_dir, tt_tok)] = (str(tt_line), str(tt_juice))
+
     # ── Snapshot to Bet History (after TT rows merged — newest date at top) ──
     ws_hist = ws(gc, ODDS_SHEET_ID, "Bet History")
     if history_rows:
@@ -2939,7 +2971,7 @@ def main():
         hour = datetime.now(EASTERN).hour
         if already_in_hist and force and hour >= 11:
             # Afternoon/evening run: update PM/EV CLV columns only — preserve morning picks
-            _clv_update_hist(ws_hist, history_rows, today)
+            _clv_update_hist(ws_hist, history_rows, today, clv_lines=clv_lines)
         elif already_in_hist and not force:
             print("Bet History: today already exists — skipping snapshot (first-run protection)")
         else:
