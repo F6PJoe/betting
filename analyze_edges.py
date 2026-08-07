@@ -2805,6 +2805,63 @@ def today_already_in_shadow(ws_shadow) -> bool:
         return False
 
 
+def _format_proj_column(ws_hist, written_rows, start_row=2):
+    """
+    Set the number format of "Our Projection" per row, because that column is
+    OVERLOADED — it holds two different quantities depending on bet type:
+        Game Total / Team Total -> projected RUNS      (e.g. 10.14)
+        Moneyline  / Run Line   -> win PROBABILITY     (e.g. 0.589)
+    A single column-wide format is therefore always wrong for one group. Rows are
+    inserted at the top each morning and inherit whatever format sits next to
+    them, so without this the two drift into each other.
+
+    This was a live bug: on 2026-08-07, 422 of 511 Bet History rows carried a
+    percent format on a runs value, rendering a 14.25-run projection as
+    "1425.00%" on the sheet and on the site that reads it.
+
+    Formats only — no cell values are written.
+    """
+    if not written_rows:
+        return
+    try:
+        t_idx = HISTORY_HEADER.index("Bet Type")
+        p_idx = HISTORY_HEADER.index("Our Projection")
+    except ValueError:
+        return
+    col, n = "", p_idx + 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        col = chr(65 + r) + col
+
+    RUNS_TYPES = {"Game Total", "Team Total"}
+    PROB_TYPES = {"Moneyline", "Run Line"}
+    NUM_FMT = {"numberFormat": {"type": "NUMBER",  "pattern": "0.00"}}
+    PCT_FMT = {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}}
+
+    # collapse consecutive same-kind rows into blocks to keep the request small
+    blocks, cur_kind, cur_start = [], None, None
+    for offset, row in enumerate(written_rows):
+        bt = str(row[t_idx]).strip() if len(row) > t_idx else ""
+        kind = "runs" if bt in RUNS_TYPES else "prob" if bt in PROB_TYPES else None
+        sheet_row = start_row + offset
+        if kind != cur_kind:
+            if cur_kind is not None:
+                blocks.append((cur_kind, cur_start, sheet_row - 1))
+            cur_kind, cur_start = kind, sheet_row
+    if cur_kind is not None:
+        blocks.append((cur_kind, cur_start, start_row + len(written_rows) - 1))
+
+    batch = [{"range": f"{col}{lo}:{col}{hi}",
+              "format": NUM_FMT if kind == "runs" else PCT_FMT}
+             for kind, lo, hi in blocks if kind]
+    if not batch:
+        return
+    try:
+        ws_hist.batch_format(batch)
+    except Exception as e:
+        print(f"  [Our Projection formatting skipped: {e}]")
+
+
 def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     """Afternoon/evening runs: update PM or EV CLV columns in today's Bet History rows.
 
@@ -2906,6 +2963,9 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
 
     ws_hist.delete_rows(min(today_row_nums), max(today_row_nums))
     ws_hist.insert_rows(updated_rows, row=2, value_input_option="USER_ENTERED")
+    # Re-inserted rows inherit neighbouring formats — reapply per-bet-type formatting
+    # to the overloaded "Our Projection" column.
+    _format_proj_column(ws_hist, updated_rows, start_row=2)
     slot_label = "12:30 PM" if col_clv.startswith("12") else "6:30 PM"
     print(f"  CLV update ({slot_label} slot): {matched}/{len(updated_rows)} rows matched")
 
@@ -3107,6 +3167,7 @@ def main():
             has_hist_header = existing and existing[0] and existing[0][0] == "Date"
             if not has_hist_header:
                 ws_hist.update([HISTORY_HEADER] + history_rows, value_input_option="USER_ENTERED")
+                _format_proj_column(ws_hist, history_rows, start_row=2)
             else:
                 if len(existing[0]) < len(HISTORY_HEADER):
                     ws_hist.update("A1", [HISTORY_HEADER], value_input_option="USER_ENTERED")
@@ -3119,6 +3180,9 @@ def main():
                     return (u, c)
                 history_rows.sort(key=_hist_sort_key, reverse=True)
                 ws_hist.insert_rows(history_rows, row=2, value_input_option="USER_ENTERED")
+                # Newly inserted rows inherit the format of their neighbours, which is
+                # wrong half the time for the overloaded "Our Projection" column.
+                _format_proj_column(ws_hist, history_rows, start_row=2)
             print(f"Inserted {len(history_rows)} bets at top of 'Bet History'")
     else:
         print("No qualifying bets to snapshot")
