@@ -981,6 +981,29 @@ TOTAL_SCALE = [
     (0.75, 0.3), (1.10, 0.4), (1.50, 0.5), (1.65, 0.6),
     (1.90, 0.7), (2.05, 0.8), (2.20, 0.9), (2.40, 1.0),
 ]
+# GT 5-star suspended 2026-08-07. Measured across 155 graded GT bets:
+#     4-star  42W-31L  (57.5%)  +7.24u
+#     5-star  28W-34L  (45.2%)  -5.38u
+# The top conviction tier loses money, and the mechanism is confirmed by run-edge
+# band: 1.5-2.0 runs returns +5.74u, 2.0-2.5 runs -0.88u, 2.5+ runs 16.7% / -4.00u.
+# Bigger claimed edge, worse result — the signature of phantom edges, same defect
+# found in Team Totals (our MEAN projection vs a line the book sets near the
+# MEDIAN; actual game totals are mean 9.25 / median 8.00, a +1.25-run skew).
+#
+# NOTE: the TT-style probability rewrite was built and REJECTED for GT on evidence.
+# Out-of-sample (fit on first 70% of games, applied to the unseen last 30%) the
+# filter lost money on the training period at every threshold (-3.48u at its best)
+# and only "won" on a test period whose unfiltered baseline was already +6.40u —
+# it tracks the period rather than adding edge. Root cause: the GT projection is
+# worse than the line it bets into. corr(our proj, actual)=0.187 vs corr(book
+# line, actual)=0.274, and our projection adds just +0.0027 R^2 beyond the line.
+# Rewriting the edge math around a projection that weak only rearranges bad bets.
+# The real fix is rebuilding the projection itself — see project_tt_edge_rebuild.
+#
+# Sizing down instead of stopping was considered and rejected: 45.2% is below
+# break-even at ANY stake. 5-star GT continues to be logged to the Game Totals
+# shadow tab so the tier keeps accruing data and can be reinstated if it turns.
+GT_MAX_STARS = 4
 # ── Moneyline & Run Line are tracked with SEPARATE scales as of 2026-06-21 ──────
 # They are different bets with measurably different edge distributions and different
 # current performance (Moneyline: median edge 9.1%, currently -0.064 ROI/bet, 45.9% win
@@ -2295,7 +2318,8 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     ]
                     # Calibrated minimum: below 15% edge GT bets lose money regardless of direction
                     # Data (309 bets): <15% = 75W/84L (47.2%, -5.46u); 15%+ = 81W/59L (57.9%, +13.30u)
-                    if edge_pct_of_line >= 15.0:
+                    # 5-star suspended 2026-08-07 (45.2%, -5.38u) — see GT_MAX_STARS.
+                    if edge_pct_of_line >= 15.0 and stars <= GT_MAX_STARS:
                         edge_rows.append(edge_row)
 
                     # Track best per game (for snapshot — only if SP known)
@@ -2305,7 +2329,10 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     # 15-20% Under: 18W/11L (62.1%, +5.22u) — prior 20% floor was cutting good bets.
                     min_pct = 15.0
                     athletics_home = (home == "Athletics")
-                    if has_sp and stars >= 4 and not athletics_home and edge_pct_of_line >= min_pct:
+                    # stars capped at GT_MAX_STARS — 5-star GT is suspended (45.2%, -5.38u).
+                    # The GT Shadow tab above still records every star level for calibration.
+                    if (has_sp and 4 <= stars <= GT_MAX_STARS and not athletics_home
+                            and edge_pct_of_line >= min_pct):
                         prev = best_total_per_game.get(gid)
                         if prev is None:
                             take_it = True
