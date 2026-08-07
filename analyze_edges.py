@@ -1471,6 +1471,97 @@ def load_prop_odds(gc) -> list[dict]:
         return []
 
 
+# ── Per-book line history ─────────────────────────────────────────────────────
+# The 'MLB Odds' tab is a snapshot — every run overwrites it, so the per-book
+# spread is destroyed as soon as the next run starts. That spread is the thing we
+# need: four books priced the same 2026-08-07 game at 8.0 and 8.5, and capturing a
+# stale book requires no projection edge at all — which matters because the GT
+# projection provably has none (see GT_MAX_STARS and gt_projection_audit.py; four
+# separate repairs all failed out-of-sample).
+#
+# This tab is APPEND-ONLY and runs on every pass (8:00 / 12:30 / 6:30), so it
+# records both cross-book disagreement (same game+market, one run) and line
+# movement (same game+market+book, across runs). Purely additive: nothing reads it
+# yet and no betting logic depends on it. It exists to make the market-based
+# approach testable in ~3-4 weeks with the same out-of-sample discipline used
+# everywhere else — do NOT bet off it before that test is run.
+LINE_HISTORY_MARKETS = {"h2h", "spreads", "totals", "team_totals"}
+LINE_HISTORY_HEADER  = ["Date", "Run At", "Game", "Commence (ET)", "Market",
+                        "Book", "Side", "Line", "Price"]
+
+
+def capture_line_history(gc, run_now: str) -> int:
+    """
+    Append this run's per-book lines to the 'Line History' tab. Returns rows written.
+
+    Never raises — a capture failure must not take down the pipeline, since nothing
+    downstream depends on this tab.
+    """
+    try:
+        all_rows = sheet_to_dicts(ws(gc, ODDS_SHEET_ID, "MLB Odds"))
+    except Exception as e:
+        print(f"  Line History: could not read MLB Odds ({e}) — skipped")
+        return 0
+
+    out = []
+    for r in all_rows:
+        market = str(r.get("market_key", "")).strip()
+        if market not in LINE_HISTORY_MARKETS:
+            continue
+        commence = str(r.get("commence_time", "")).strip()
+        if not commence:
+            continue
+        try:
+            ct_et = datetime.fromisoformat(commence.replace("Z", "+00:00")).astimezone(EASTERN)
+        except (ValueError, TypeError):
+            continue
+        home = str(r.get("home_team", "")).strip()
+        away = str(r.get("away_team", "")).strip()
+        # team_totals put the team in 'player' and Over/Under in 'direction';
+        # the other markets carry the side in 'name'.
+        player    = str(r.get("player", "")).strip()
+        direction = str(r.get("direction", "")).strip()
+        side = f"{player} {direction}".strip() if (player or direction) else str(r.get("name", "")).strip()
+        out.append([
+            ct_et.strftime("%Y-%m-%d"),
+            run_now,
+            f"{abbrev(away)} @ {abbrev(home)}",
+            ct_et.strftime("%Y-%m-%d %H:%M"),
+            market,
+            str(r.get("sportsbook", "")).strip(),
+            side,
+            str(r.get("point", "")).strip(),
+            str(r.get("price", "")).strip(),
+        ])
+
+    if not out:
+        print("  Line History: no eligible odds rows this run — skipped")
+        return 0
+
+    try:
+        wsl = ws(gc, ODDS_SHEET_ID, "Line History")
+        existing = wsl.get_all_values()
+        if not existing or not existing[0] or existing[0][0] != "Date":
+            wsl.update([LINE_HISTORY_HEADER], value_input_option="USER_ENTERED")
+            existing = [LINE_HISTORY_HEADER]
+        # Idempotency guard: re-running the same minute must not double-write.
+        # Reads one column rather than the whole tab, which matters as this grows.
+        try:
+            if run_now in set(wsl.col_values(2)):
+                print(f"  Line History: run {run_now} already captured — skipped")
+                return 0
+        except Exception:
+            pass
+        wsl.append_rows(out, value_input_option="USER_ENTERED",
+                        insert_data_option="INSERT_ROWS", table_range="A1")
+        print(f"  Line History: appended {len(out)} rows "
+              f"({len({r[2] for r in out})} games x {len({r[5] for r in out})} books)")
+        return len(out)
+    except Exception as e:
+        print(f"  Line History: write failed ({e}) — pipeline continues")
+        return 0
+
+
 # ── Game projection ───────────────────────────────────────────────────────────
 def project_game(home_team, away_team, home_era, away_era,
                  home_off, away_off, park_factor,
@@ -3020,6 +3111,11 @@ def main():
     print("Loading odds ...")
     odds_rows = load_odds(gc)
     print(f"  {len(odds_rows)} odds rows loaded")
+
+    # Snapshot per-book lines before anything else can overwrite 'MLB Odds'.
+    # Runs on every pass (including --force) — the 12:30/6:30 passes are where
+    # line movement gets recorded, so skipping them would defeat the purpose.
+    capture_line_history(gc, run_now)
 
     print("Loading pitcher data ...")
     pitchers = load_pitchers(gc)
