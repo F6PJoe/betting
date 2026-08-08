@@ -2978,10 +2978,15 @@ def _format_proj_column(ws_hist, written_rows, start_row=2):
         p_idx = HISTORY_HEADER.index("Our Projection")
     except ValueError:
         return
-    col, n = "", p_idx + 1
-    while n:
-        n, r = divmod(n - 1, 26)
-        col = chr(65 + r) + col
+
+    def _col_letter(idx0):
+        col, n = "", idx0 + 1
+        while n:
+            n, r = divmod(n - 1, 26)
+            col = chr(65 + r) + col
+        return col
+
+    col = _col_letter(p_idx)
 
     RUNS_TYPES = {"Game Total", "Team Total"}
     PROB_TYPES = {"Moneyline", "Run Line"}
@@ -3004,6 +3009,23 @@ def _format_proj_column(ws_hist, written_rows, start_row=2):
     batch = [{"range": f"{col}{lo}:{col}{hi}",
               "format": NUM_FMT if kind == "runs" else PCT_FMT}
              for kind, lo, hi in blocks if kind]
+
+    # "DK Juice" holds American odds (-113, +159) and drifts into a PERCENT format
+    # the same way, for the same reason — new rows inherit their neighbours'. On
+    # 2026-08-08 every populated cell rendered as "-11300.00%" against a correct
+    # stored value of -113. The values were never wrong, only the display, but the
+    # sheet feeds the site. Pinned to a plain integer format on every write.
+    # Book Juice is deliberately NOT touched: it goes through fmt_juice(), which
+    # writes a leading apostrophe so TablePress reads it as text and keeps the "+".
+    try:
+        end_row = start_row + len(written_rows) - 1
+        if end_row >= start_row:
+            dk_col = _col_letter(HISTORY_HEADER.index("DK Juice"))
+            batch.append({"range": f"{dk_col}{start_row}:{dk_col}{end_row}",
+                          "format": {"numberFormat": {"type": "NUMBER", "pattern": "0"}}})
+    except ValueError:
+        pass
+
     if not batch:
         return
     try:
