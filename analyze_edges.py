@@ -1556,16 +1556,30 @@ def capture_line_history(gc, run_now: str) -> int:
         if not existing or not existing[0] or existing[0][0] != "Date":
             wsl.update([LINE_HISTORY_HEADER], value_input_option="USER_ENTERED")
             existing = [LINE_HISTORY_HEADER]
-        # Idempotency guard: re-running the same minute must not double-write.
+        # Idempotency guard: re-running the same second must not double-write.
         # Reads one column rather than the whole tab, which matters as this grows.
+        # Timestamps must be NORMALISED before comparing: value_input_option is
+        # USER_ENTERED (so Line/Price land as numbers), which makes Sheets parse
+        # "2026-08-08 08:44:41" into a datetime and echo it back unpadded as
+        # "2026-08-08 8:44:41". A raw string match therefore never fires.
+        def _norm_ts(s):
+            s = str(s).strip()
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M"):
+                try:
+                    return datetime.strptime(s, fmt).strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+            return s
         try:
-            if run_now in set(wsl.col_values(2)):
+            if _norm_ts(run_now) in {_norm_ts(v) for v in wsl.col_values(2)[1:]}:
                 print(f"  Line History: run {run_now} already captured — skipped")
                 return 0
         except Exception:
             pass
-        wsl.append_rows(out, value_input_option="USER_ENTERED",
-                        insert_data_option="INSERT_ROWS", table_range="A1")
+        # Newest-first, matching every other tab in this workbook. Appending to the
+        # bottom is cheaper for a tab this size, but it buried today's capture ~1,500
+        # rows down and read as "nothing ran" — verifiability beats the write cost.
+        wsl.insert_rows(out, row=2, value_input_option="USER_ENTERED")
         print(f"  Line History: appended {len(out)} rows "
               f"({len({r[2] for r in out})} games x {len({r[5] for r in out})} books)")
         return len(out)
