@@ -3071,10 +3071,32 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
         return (game, btype, direc, team_tok)
 
     def _parse_juice(s):
+        """
+        Parse American odds from anything the sheet might hand us.
+
+        This used to be int(str(s)...) and silently returned None whenever the cell
+        carried a display format — which killed CLV outright. Rows insert at the top
+        each morning and inherit their neighbours' formats, so a juice cell can drift
+        to PERCENT and render -110 as "-11000.00%" (DK Juice had exactly this on 108
+        of 535 rows on 2026-08-08). int() threw, this returned None, and the caller
+        wrote "" for CLV while still writing the juice — leaving CLV 0-for-535 with
+        no error anywhere. Now tolerates %, floats, commas and apostrophes.
+        """
+        if s is None:
+            return None
+        txt = str(s).strip().replace("'", "").replace("+", "").replace(",", "")
+        if not txt:
+            return None
+        pct = txt.endswith("%")
+        if pct:
+            txt = txt[:-1]
         try:
-            return int(str(s).replace("+", "").replace("'", "").strip())
+            val = float(txt)
         except (ValueError, TypeError):
             return None
+        if pct:
+            val /= 100.0        # "-11000.00%" -> -110
+        return int(round(val))
 
     fresh_lookup = {}
     for row in fresh_rows:
@@ -3098,10 +3120,20 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     _clv_cols = [ci["12:30 Line"], ci["12:30 Juice"], ci["12:30 CLV%"],
                  ci["6:30 Line"],  ci["6:30 Juice"],  ci["6:30 CLV%"]]
 
+    # Parse juice from UNFORMATTED values — display strings carry whatever format the
+    # cell drifted into, which is what silently broke CLV. Row CONTENT still comes from
+    # the display read, so writing back cannot alter how anything else renders.
+    try:
+        raw_vals = ws_hist.get_all_values(value_render_option="UNFORMATTED_VALUE")
+    except Exception:
+        raw_vals = all_vals
+
     matched = 0
+    unparsed = 0
     updated_rows = []
     for row_num in today_row_nums:
         row = list(all_vals[row_num - 1]) + [""] * max(0, n_cols - len(all_vals[row_num - 1]))
+        raw_row = raw_vals[row_num - 1] if row_num - 1 < len(raw_vals) else []
         # If header was stale, old CLV data landed in wrong columns — wipe all CLV positions
         if header_stale:
             for idx in _clv_cols:
@@ -3112,14 +3144,23 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
         all_lines = clv_lines or {}
         if key in all_lines or key in fresh_lookup:
             new_line, new_juice = all_lines[key] if key in all_lines else fresh_lookup[key]
-            am_juice_int  = _parse_juice(row[ci["Book Juice"]])
+            bj_idx  = ci["Book Juice"]
+            bj_raw  = raw_row[bj_idx] if len(raw_row) > bj_idx else ""
+            am_juice_int  = _parse_juice(bj_raw)
+            if am_juice_int is None:            # fall back to the display string
+                am_juice_int = _parse_juice(row[bj_idx])
             new_juice_int = _parse_juice(new_juice)
             if am_juice_int is not None and new_juice_int is not None:
                 am_impl  = american_to_implied(am_juice_int)
                 new_impl = american_to_implied(new_juice_int)
                 clv_str  = f"{(new_impl - am_impl) * 100:+.2f}%"
             else:
+                # Never fail silently again — a blank CLV is invisible, and CLV is the
+                # metric the whole market-edge question rests on.
                 clv_str = ""
+                unparsed += 1
+                print(f"    CLV parse failed: book juice={row[bj_idx]!r} "
+                      f"(raw {bj_raw!r}) new juice={new_juice!r}")
             row[ci[col_line]]  = new_line
             row[ci[col_juice]] = new_juice
             row[ci[col_clv]]   = clv_str
@@ -3139,7 +3180,12 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     # to the overloaded "Our Projection" column.
     _format_proj_column(ws_hist, updated_rows, start_row=2)
     slot_label = "12:30 PM" if col_clv.startswith("12") else "6:30 PM"
-    print(f"  CLV update ({slot_label} slot): {matched}/{len(updated_rows)} rows matched")
+    filled = sum(1 for r in updated_rows if str(r[ci[col_clv]]).strip())
+    print(f"  CLV update ({slot_label} slot): {matched}/{len(updated_rows)} rows matched, "
+          f"{filled} CLV values written"
+          + (f", {unparsed} UNPARSEABLE" if unparsed else ""))
+    if matched and not filled:
+        print("    *** WARNING: rows matched but no CLV written — check juice parsing ***")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
