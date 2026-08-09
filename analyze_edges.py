@@ -1552,6 +1552,16 @@ def capture_line_history(gc, run_now: str) -> int:
 
     try:
         wsl = ws(gc, ODDS_SHEET_ID, "Line History")
+        # ws() creates tabs 40 columns wide. This one writes 9 and grows ~1800
+        # rows/day, so the unused width costs 31 empty cells per row — 12.96M cells
+        # over a 180-day season against Google's 10M-per-spreadsheet limit, i.e. it
+        # would take the whole workbook down mid-season. Trimmed to the header width.
+        want_cols = len(LINE_HISTORY_HEADER) + 1
+        if wsl.col_count > want_cols:
+            try:
+                wsl.resize(rows=wsl.row_count, cols=want_cols)
+            except Exception:
+                pass
         existing = wsl.get_all_values()
         if not existing or not existing[0] or existing[0][0] != "Date":
             wsl.update([LINE_HISTORY_HEADER], value_input_option="USER_ENTERED")
