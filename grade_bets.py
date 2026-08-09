@@ -64,6 +64,32 @@ TEAM_ABBREV = {
     "KC":  "Kansas City Royals",   "SD":  "San Diego Padres",     "SF":  "San Francisco Giants",
 }
 
+def norm_name(name: str) -> str:
+    """
+    Normalize a player name for cross-source matching.
+
+    MLB Stats API returns accented names ("Julio Rodriguez" with an accented i,
+    "Jose Ramirez" with accents) while the odds feed supplies plain ASCII. Both
+    sides previously used only .strip().lower(), so those never matched and the
+    props grader silently skipped every accented player — a large share of MLB.
+    Audit 2026-08-09 caught it: Julio Rodriguez, Yandy Diaz, Jose Ramirez and
+    Jose Soriano all played on 2026-07-26 yet read as "not in box score".
+
+    Strips combining marks, punctuation and generational suffixes so
+    "José Ramírez", "Jose Ramirez" and "Jose Ramirez Jr." all collapse together.
+    """
+    import unicodedata
+    if not name:
+        return ""
+    s = unicodedata.normalize("NFKD", str(name))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.lower().strip()
+    for junk in (".", ",", "'", "`", "-"):
+        s = s.replace(junk, " " if junk == "-" else "")
+    parts = [p for p in s.split() if p not in ("jr", "sr", "ii", "iii", "iv")]
+    return " ".join(parts)
+
+
 def expand_game_label(label: str) -> str:
     """Convert 'BAL @ BOS' → 'baltimore orioles @ boston red sox' for scores dict lookup."""
     parts = label.strip().split(" @ ")
@@ -157,7 +183,7 @@ def fetch_player_stats(date_str: str) -> dict:
         for side in ("away", "home"):
             players = box.get("teams", {}).get(side, {}).get("players", {})
             for pid, pdata in players.items():
-                name = pdata.get("person", {}).get("fullName", "").strip().lower()
+                name = norm_name(pdata.get("person", {}).get("fullName", ""))
                 if not name:
                     continue
 
@@ -1130,7 +1156,7 @@ def grade_props(ws_props, scores: dict, player_stats: dict, yesterday: str) -> i
         if prop_type not in PROP_KEY:
             continue
 
-        player    = row[c_player].strip().lower() if c_player >= 0 else ""
+        player    = norm_name(row[c_player]) if c_player >= 0 else ""
         direction = row[c_dir].strip() if c_dir >= 0 else ""
         stat_key  = PROP_KEY[prop_type]
 
