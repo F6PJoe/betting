@@ -1598,6 +1598,110 @@ def capture_line_history(gc, run_now: str) -> int:
         return 0
 
 
+# ── Dave+ history ─────────────────────────────────────────────────────────────
+# Dave+ is the proprietary hitter metric Joe and the owner built: recent-form wOBA /
+# ISO / wRC+ / K% over 7d, 14d and 30d windows, weighted into a composite and then
+# adjusted for the opposing pitcher ("opp pit", "hit-pit wgt"). It is the one input
+# in this pipeline that is genuinely ours rather than public.
+#
+# The source tab (Dave(H) in DATA_SHEET_ID) holds ONLY the current slate — 385 rows,
+# no date column, overwritten daily. So every day's values were being destroyed, and
+# the individual-player use (the one that matters) could not be backtested at all.
+#
+# What IS already testable is the team aggregate: load_offense() sums Dave+ per team
+# into offense_adj, and the shadow tab stored that historically. Tested 2026-08-09:
+#   corr(offense adj, actual total)      +0.0222   (book line: +0.2207)
+#   corr(offense adj, line residual)     train -0.086 / test +0.049 -> sign flips
+#   out-of-sample R^2 on the residual    -0.0406
+# i.e. summed across a roster it carries nothing the market has not priced. But that
+# aggregation aches to destroy a matchup signal — it sums per-batter, pitcher-adjusted
+# values over a whole roster and normalises. The per-player values, used on PROPS
+# (a far less efficient market than game lines), are the real hypothesis and are what
+# this captures.
+#
+# Guarded on DATE, not run: the morning values are what the day's picks were built on,
+# so the first capture of the day is the one that matters. If Joe's sheet turns out to
+# refresh after the 8am run, move the guard to per-run.
+# Purely additive — nothing reads this yet. Do NOT bet off it before the test runs.
+DAVE_HISTORY_HEADER = ["Date", "Run At", "Player ID", "Player", "Team", "Opp",
+                       "Dave+", "Total", "wgt total", "opp pit", "hit-pit wgt"]
+
+
+def capture_dave_history(gc, run_now: str) -> int:
+    """
+    Append today's Dave+ values to the 'Dave+ History' tab. Returns rows written.
+    Never raises — this is data collection, not part of producing picks.
+    """
+    today_str = datetime.now(EASTERN).strftime("%Y-%m-%d")
+    try:
+        src = ws(gc, DATA_SHEET_ID, "Dave(H)").get_all_values()
+    except Exception as e:
+        print(f"  Dave+ History: could not read Dave(H) ({e}) — skipped")
+        return 0
+    if len(src) < 2 or not src[0]:
+        print("  Dave+ History: Dave(H) empty — skipped")
+        return 0
+
+    # Dave(H) has DUPLICATE headers ("wgt wOBA" etc. appear twice), so resolve by
+    # name taking the LAST match — the same trap that shadowed the Edges timestamp.
+    # The columns captured here are all unique, but resolve defensively anyway.
+    hdr = src[0]
+    def idx(name):
+        hits = [i for i, h in enumerate(hdr) if str(h).strip() == name]
+        return hits[-1] if hits else None
+    cols = {n: idx(n) for n in ("ID", "Player", "Team", "Opp", "Dave+",
+                                "Total", "wgt total", "opp pit", "hit-pit wgt")}
+    if cols["Dave+"] is None or cols["Player"] is None:
+        print(f"  Dave+ History: expected columns missing from Dave(H) — skipped")
+        return 0
+
+    def cell(row, name):
+        i = cols[name]
+        return str(row[i]).strip() if i is not None and len(row) > i else ""
+
+    out = []
+    for r in src[1:]:
+        if not r or not cell(r, "Player"):
+            continue
+        if not cell(r, "Dave+"):
+            continue
+        out.append([today_str, run_now, cell(r, "ID"), cell(r, "Player"),
+                    cell(r, "Team"), cell(r, "Opp"), cell(r, "Dave+"),
+                    cell(r, "Total"), cell(r, "wgt total"),
+                    cell(r, "opp pit"), cell(r, "hit-pit wgt")])
+    if not out:
+        print("  Dave+ History: no rows with a Dave+ value — skipped")
+        return 0
+
+    try:
+        wsd = ws(gc, ODDS_SHEET_ID, "Dave+ History")
+        want_cols = len(DAVE_HISTORY_HEADER) + 1
+        if wsd.col_count > want_cols:      # ws() creates 40 wide; see Line History
+            try:
+                wsd.resize(rows=wsd.row_count, cols=want_cols)
+            except Exception:
+                pass
+        existing = wsd.get_all_values()
+        if not existing or not existing[0] or existing[0][0] != "Date":
+            wsd.update([DAVE_HISTORY_HEADER], value_input_option="USER_ENTERED")
+        else:
+            # One capture per DATE. Reads a single column so this stays cheap as the
+            # tab grows past 60k rows over a season.
+            try:
+                if today_str in set(wsd.col_values(1)):
+                    print(f"  Dave+ History: {today_str} already captured — skipped")
+                    return 0
+            except Exception:
+                pass
+        wsd.append_rows(out, value_input_option="USER_ENTERED",
+                        insert_data_option="INSERT_ROWS", table_range="A1")
+        print(f"  Dave+ History: appended {len(out)} players for {today_str}")
+        return len(out)
+    except Exception as e:
+        print(f"  Dave+ History: write failed ({e}) — pipeline continues")
+        return 0
+
+
 # ── Game projection ───────────────────────────────────────────────────────────
 def project_game(home_team, away_team, home_era, away_era,
                  home_off, away_off, park_factor,
@@ -3226,6 +3330,10 @@ def main():
     # Runs on every pass (including --force) — the 12:30/6:30 passes are where
     # line movement gets recorded, so skipping them would defeat the purpose.
     capture_line_history(gc, run_now)
+
+    # Archive today's Dave+ before the source tab is overwritten — it holds only the
+    # current slate, so any day not captured here is gone permanently.
+    capture_dave_history(gc, run_now)
 
     print("Loading pitcher data ...")
     pitchers = load_pitchers(gc)
