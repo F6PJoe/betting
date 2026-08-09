@@ -3290,10 +3290,20 @@ def main():
     # Edges tab write deferred until after team totals are added (see below)
 
     # ── Snapshot to Game Total Shadow (first run of day only) ────────────────
+    # --force is the afternoon/evening CLV pass. It must NOT re-snapshot shadows:
+    # by 6:30 PM the odds API has rolled over to TOMORROW's slate, so re-writing
+    # stamps tomorrow's games with today's date. Those rows can never be graded —
+    # the matchup does not exist on that date — so they sit Pending forever and
+    # quietly bias every analysis run off this tab. Audit 2026-08-09 found 88 such
+    # Game Total rows back to 2026-06-21 (e.g. "TOR @ PHI" under 2026-08-06, when
+    # Toronto actually played the Cubs and that matchup was 2026-08-07).
+    # Same defect and same fix as Team Totals below.
     ws_gt_shadow = ws(gc, ODDS_SHEET_ID, "Game Totals")
     if gt_shadow_rows:
         already_in_gt = today_already_in_gt_shadow(ws_gt_shadow)
-        if already_in_gt and not force:
+        if force:
+            print("Game Total Shadow: --force (CLV pass) — skipping snapshot to preserve morning data")
+        elif already_in_gt:
             print("Game Total Shadow: today already exists — skipping (first-run protection)")
         else:
             existing = ws_gt_shadow.get_all_values()
@@ -3318,7 +3328,11 @@ def main():
     ws_shadow = ws(gc, ODDS_SHEET_ID, "ML RL")
     if shadow_rows:
         already_in_shadow = today_already_in_shadow(ws_shadow)
-        if already_in_shadow and not force:
+        if force:
+            # See Game Total Shadow above — --force must not re-snapshot, or the
+            # evening pass writes tomorrow's slate under today's date.
+            print("ML RL Shadow: --force (CLV pass) — skipping snapshot to preserve morning data")
+        elif already_in_shadow:
             print("ML RL Shadow: today already exists — skipping (first-run protection)")
         else:
             existing = ws_shadow.get_all_values()
@@ -3476,7 +3490,12 @@ def main():
         existing_props = ws_props.get_all_values()
         correct_header = existing_props and existing_props[0] == PLAYER_PROPS_HEADER
         today_in_props = any(r and r[0] == today_str for r in existing_props[1:]) if existing_props else False
-        if today_in_props and not force:
+        if force:
+            # See Game Total Shadow — --force must not re-snapshot. This tab took the
+            # worst of it: 394 ungraded rows as of 2026-08-09, all with empty Actual
+            # Stat, because the evening pass wrote tomorrow's players under today.
+            print("  Player Props Shadow: --force (CLV pass) — skipping snapshot to preserve morning data")
+        elif today_in_props:
             print("  Player Props Shadow: today already exists — skipping (first-run protection)")
         else:
             if today_in_props and force:

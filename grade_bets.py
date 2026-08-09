@@ -1197,8 +1197,108 @@ def grade_props(ws_props, scores: dict, player_stats: dict, yesterday: str) -> i
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+# ── Backfill for rows the one-shot grader missed ─────────────────────────────
+# Every grader filters on `date != yesterday`, so a row only ever gets ONE chance
+# to be graded. If the scores API hiccups, a game runs late, a name fails to match,
+# or a scheduled run fails, that row stays Pending forever — silently. Audit on
+# 2026-08-09 found 496 such rows: 88 Game Totals (2026-06-21 onward), 394 Player
+# Props, 12 Team Totals, 2 Bet History. Every one had empty score columns.
+#
+# That silently biases every analysis run off these tabs, because the missing rows
+# are not random — they cluster on days the API or the scheduler had trouble.
+#
+# Scores are keyed by game label with NO date, so merging several days would let a
+# repeat matchup grade against the wrong day's score. Backfill therefore runs one
+# date at a time, fetching that date's scores in isolation.
+GRADE_LOOKBACK_DAYS = 10   # scheduled runs self-heal gaps this far back
+MAX_BACKFILL_DATES  = 6    # cap per run so a long backlog drains over several days
+                           # instead of blowing the 15-minute Actions timeout
+
+
+def _ungraded_dates(gc, before_date, lookback_days):
+    """Dates (newest first) with rows still ungraded, within the lookback window."""
+    from datetime import date as _date
+    floor = (datetime.strptime(before_date, "%Y-%m-%d") - timedelta(days=lookback_days)
+             ).strftime("%Y-%m-%d")
+    tabs = {"Bet History": "Result", "Team Totals": "Result",
+            "Game Totals": "Result", "ML RL": "Result",
+            "Player Props Shadow": "Result"}
+    found = {}
+    for tab, res_col in tabs.items():
+        try:
+            vals = sheets_call(get_ws(gc, tab).get_all_values)
+        except Exception:
+            continue
+        if not vals or not vals[0]:
+            continue
+        hdr = vals[0]
+        if res_col not in hdr:
+            continue
+        ri = hdr.index(res_col)
+        for r in vals[1:]:
+            if not r or not str(r[0]).strip():
+                continue
+            d = str(r[0]).strip()
+            if not (floor <= d < before_date):
+                continue
+            cur = str(r[ri]).strip() if len(r) > ri else ""
+            if cur in ("", "Pending"):
+                found.setdefault(d, set()).add(tab)
+    return sorted(found.items(), reverse=True)
+
+
+def backfill_ungraded(gc, before_date, lookback_days=GRADE_LOOKBACK_DAYS,
+                      max_dates=MAX_BACKFILL_DATES):
+    """Give previously-missed rows another chance. Graders already skip graded rows."""
+    pending = _ungraded_dates(gc, before_date, lookback_days)
+    if not pending:
+        log("  no ungraded rows in the lookback window")
+        return 0
+    log(f"  {len(pending)} date(s) with ungraded rows; processing up to {max_dates}")
+    total = 0
+    for d, tabs in pending[:max_dates]:
+        log(f"  backfilling {d} ({', '.join(sorted(tabs))}) ...")
+        try:
+            sc = fetch_scores(d)
+        except Exception as e:
+            log(f"    fetch_scores failed: {e}")
+            continue
+        if not sc:
+            log(f"    no completed games returned for {d} — skipping")
+            continue
+        try:
+            if "Bet History" in tabs:
+                n = grade_history(get_ws(gc, "Bet History"), sc, d)[0]
+                total += n; log(f"    Bet History: {n}")
+            if "ML RL" in tabs:
+                n = grade_shadow(get_ws(gc, "ML RL"), sc, d)[0]
+                total += n; log(f"    ML RL: {n}")
+            if "Game Totals" in tabs:
+                n = grade_gt_shadow(get_ws(gc, "Game Totals"), sc, d)
+                total += n; log(f"    Game Totals: {n}")
+            if "Team Totals" in tabs:
+                n = grade_team_totals(get_ws(gc, "Team Totals"), sc, d)
+                total += n; log(f"    Team Totals: {n}")
+            if "Player Props Shadow" in tabs:
+                ps = fetch_player_stats(d)
+                n = grade_props(get_ws(gc, "Player Props Shadow"), sc, ps, d)
+                total += n; log(f"    Player Props: {n}")
+        except Exception as e:
+            log(f"    backfill error on {d}: {e}")
+    log(f"  backfill graded {total} previously-missed rows")
+    return total
+
+
 def main():
     global _log_fh
+    import argparse
+    _ap = argparse.ArgumentParser(description="Grade bets and rebuild Performance")
+    _ap.add_argument("--backfill-days", type=int, default=GRADE_LOOKBACK_DAYS,
+                     help="how far back to retry ungraded rows (default %(default)s)")
+    _ap.add_argument("--max-backfill-dates", type=int, default=MAX_BACKFILL_DATES,
+                     help="cap dates processed per run (default %(default)s)")
+    _args = _ap.parse_args()
+
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     run_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1219,6 +1319,15 @@ def main():
 
     log("\nConnecting to Google Sheets ...")
     gc = auth()
+
+    # Retry anything the one-shot grader missed on earlier days, BEFORE grading
+    # yesterday — so a backfill failure cannot block the normal daily pass.
+    log("\nBackfilling previously-missed rows ...")
+    try:
+        backfill_ungraded(gc, yesterday, _args.backfill_days, _args.max_backfill_dates)
+    except Exception as e:
+        log(f"  backfill failed (continuing): {e}")
+        errors.append(f"backfill_ungraded raised: {e}")
 
     log("\nGrading Bet History ...")
     ws_hist = get_ws(gc, "Bet History")
