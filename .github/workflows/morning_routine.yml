@@ -51,3 +51,18 @@ jobs:
 
       - name: Write to sheets
         run: python write_sheets.py
+
+      # Runs LAST so it audits the state the morning actually produced, and
+      # continue-on-error so a finding — or an API hiccup inside the audit — can
+      # never fail a run whose picks already published successfully.
+      #
+      # Here because 2026-08-09/10 produced six bugs that threw no exception and
+      # wrote no error: CLV was 0-for-535 rows, the evening pass was overwriting the
+      # shadow tabs with TOMORROW's games, 1,033 rows were never graded because the
+      # grader ran once per row and gave up, accented player names never matched, and
+      # two columns rendered correct values as nonsense. Every one was found by a
+      # human reading cells. This puts that check in front of someone daily instead
+      # of waiting for the next time somebody happens to look.
+      - name: Pipeline audit (report only)
+        continue-on-error: true
+        run: python pipeline_audit.py
