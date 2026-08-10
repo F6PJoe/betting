@@ -2074,6 +2074,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             best_line[key] = {"line": line, "price": price, "book": book,
                                "home": home, "away": away}
 
+    tt_all_lines        = {}   # EVERY evaluated TT line, pre-edge-gate, for CLV lookup
     tt_rows             = []   # Team Totals — own tab
     tt_rows_for_history = []   # Team Totals — Bet History rows (4+ star only)
     tt_edge_rows        = []   # Team Totals — Edges tab rows
@@ -2266,6 +2267,17 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             proj = mu
             # Edge is now in probability POINTS, not a percentage difference.
             edge_pct = (our_prob - implied) * 100
+
+            # Record the line for CLV BEFORE the edge gate. clv_lines for GT/ML/RL is
+            # built from the all-evaluated shadow dicts precisely so a morning pick
+            # that has since lost its edge can still be priced — but TT was being
+            # sourced from the edge-FILTERED tt_rows, so any TT bet no longer clearing
+            # TT_MIN_EDGE_PTS simply vanished from the lookup and got no CLV at all.
+            # Caught 2026-08-10: ATL U4.5 was live at -130 across the board and still
+            # came back blank. This is the same defect the original CLV fix addressed
+            # for the other three bet types; TT was left on the filtered path.
+            tt_all_lines[(game_label, "Team Total", direction, abbrev(player))] = (
+                str(line), str(price))
             # One floor for both directions. The old code needed a 20% Over floor vs
             # 8% for Unders purely to suppress the mean-vs-median bias; with that bias
             # gone the two sides perform the same (at >=+3 pts: Overs 54.8%, Unders
@@ -2386,7 +2398,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
     sort_key = lambda r: (r[11], r[8])  # units col=11, edge col=8
     tt_rows.sort(key=sort_key, reverse=True)
     prop_rows.sort(key=lambda r: (r[11], float(str(r[9]).replace("%","")) if r[9] else 0), reverse=True)  # units col=11, edge% col=9
-    return tt_rows, tt_edge_rows, tt_rows_for_history, prop_rows
+    return tt_rows, tt_edge_rows, tt_rows_for_history, prop_rows, tt_all_lines
 
 
 # ── Edge analysis ─────────────────────────────────────────────────────────────
@@ -2418,6 +2430,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
     # Track best ML/RL line per unique signal (game+type+side) for shadow snapshot
     best_shadow_per_signal = {}
+    # Every ML/RL price seen, recorded before the edge gates so CLV can still be
+    # computed for a bet whose edge has faded since the morning. See clv_lines below.
+    _clv_seen = {}
 
     def juice_numeric(price):
         """Higher value = better odds for the bettor (works for both +/- lines)."""
@@ -2673,6 +2688,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 ml_pct = 0.5 + 0.6 * (our_pct - 0.5)
                 edge_pct = (ml_pct - implied) * 100
 
+                # Record for CLV BEFORE the edge gate — see all_lines_for_clv below.
+                _clv_seen[(game_label, "Moneyline", side, "")] = ("", str(price))
+
                 if abs(edge_pct) >= 4.0 and edge_pct > 0:
                     units = unit_scale(edge_pct, ML_SCALE)
                     stars = stars_from_units(units)
@@ -2730,6 +2748,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                     our_pct = (1.0 - proj["away_rl_pct"]) if side == "Home" else (1.0 - proj["home_rl_pct"])
                 implied  = american_to_implied(price)
                 edge_pct = (our_pct - implied) * 100
+
+                # Record for CLV BEFORE the edge gate — see all_lines_for_clv below.
+                _clv_seen[(game_label, "Run Line", side, "")] = (str(spread), str(price))
 
                 if 12.0 <= edge_pct <= 20.0:
                     units = unit_scale(edge_pct, RL_SCALE)
@@ -2884,7 +2905,13 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
     # Build comprehensive CLV lines lookup (ALL evaluated bets, not just edges).
     # Used by _clv_update_hist so afternoon runs can populate CLV columns even
     # when a morning pick no longer has an edge at a later snapshot.
-    clv_lines = {}
+    # _clv_seen holds EVERY evaluated ML/RL price, recorded before the edge gates.
+    # best_shadow_per_signal is NOT the "all options" dict its old comment claimed —
+    # ML only lands in it above +4% edge and RL only inside the 12-20% window. So a
+    # morning pick whose edge has since faded had no entry and silently got no CLV.
+    # Caught 2026-08-10: KC +1.5 was live at +105/+115 across four books and still
+    # came back blank. Same defect as the TT one fixed in analyze_props().
+    clv_lines = dict(_clv_seen)
     for (gid, direction), g in best_gt_shadow_per_game_dir.items():
         key = (g["game_label"], "Game Total", direction, "")
         clv_lines[key] = (str(g["t_line"]), str(g["juice"]))
@@ -3281,6 +3308,7 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     matched = 0
     unparsed = 0
     moved = 0
+    unmatched_keys = []
     updated_rows = []
     for row_num in today_row_nums:
         row = list(all_vals[row_num - 1]) + [""] * max(0, n_cols - len(all_vals[row_num - 1]))
@@ -3374,6 +3402,11 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
             row[ci[col_juice]] = new_juice
             row[ci[col_clv]]   = clv_str
             matched += 1
+        elif str(row[ci["Result"]]).strip() in ("", "Pending"):
+            # An ungraded bet that found no line is a silent CLV hole — the bet may
+            # still be live on the board and simply keyed differently. Print the key
+            # so the mismatch is visible instead of showing up later as a blank cell.
+            unmatched_keys.append(key)
         updated_rows.append(row)
 
     def _sort_key(r):
@@ -3396,6 +3429,8 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
           + (f", {unparsed} UNPARSEABLE" if unparsed else ""))
     if matched and not filled:
         print("    *** WARNING: rows matched but no CLV written — check juice parsing ***")
+    for k in unmatched_keys:
+        print(f"    no line found for {k} — bet may still be live but keyed differently")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -3574,7 +3609,7 @@ def main():
 
     # ── Player Props analysis and snapshot ───────────────────────────────────
     print("\nRunning player props analysis ...")
-    tt_rows, tt_edge_rows, tt_rows_for_history, prop_shadow_rows = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
+    tt_rows, tt_edge_rows, tt_rows_for_history, prop_shadow_rows, tt_all_lines = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
                                                                                 sp_opp_stats=sp_opp_stats,
                                                                                 game_projections=game_projections,
                                                                                 historical_edges=historical_edges)
@@ -3582,7 +3617,15 @@ def main():
     edge_rows.extend(tt_edge_rows)
     history_rows.extend(tt_rows_for_history)
 
-    # Add TT lines to comprehensive CLV lookup (uses TEAM_TOTAL_HEADER column positions)
+    # Add TT lines to the comprehensive CLV lookup. tt_all_lines holds EVERY evaluated
+    # team total, recorded before the edge gate — so a morning pick that has since
+    # dropped below TT_MIN_EDGE_PTS can still be priced at the close. tt_rows is
+    # edge-filtered and was the only source here until 2026-08-10, which is why live
+    # TT bets came back with no CLV once their edge faded.
+    clv_lines.update(tt_all_lines)
+
+    # Then let today's actual TT bet rows win where they exist — same line, but the
+    # book/price we recorded for the bet rather than whichever book led at eval time.
     tt_ci = {h: i for i, h in enumerate(TEAM_TOTAL_HEADER)}
     for trow in tt_rows:
         if not trow:
