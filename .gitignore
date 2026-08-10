@@ -18,3 +18,9 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime logs — regenerated every run, no reason to version them.
+# run_log.txt was tracked on a PUBLIC repo; no credentials in it, but it created
+# diff noise on every commit and leaked local Windows paths in tracebacks.
+run_log.txt
+clv_log.txt
