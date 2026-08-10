@@ -294,6 +294,47 @@ if "Line History" in TABS:
 else:
     add("FAIL", "Line History", "tab missing entirely")
 
+# ── 9. API credit burn ───────────────────────────────────────────────────────
+# Snapshot density went to every 30 minutes on 2026-08-10, taking projected usage to
+# ~72% of the 20,000/month plan once NFL is running. That is deliberate — capturing
+# the closing line matters more than the credits — but it leaves less room for error
+# than before, so the burn needs to be visible rather than discovered when writes
+# start failing. The plan resets on the 1st, so pace is measured against day-of-month.
+print("\n" + "-" * 84)
+print("9. API CREDIT BURN")
+print("-" * 84)
+try:
+    import requests
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    _key = os.environ.get("ODDS_API_KEY", "")
+    if _key:
+        # /v4/sports does not count against the quota
+        _r = requests.get("https://api.the-odds-api.com/v4/sports",
+                          params={"apiKey": _key}, timeout=20)
+        used = int(_r.headers.get("x-requests-used", 0))
+        rem  = float(_r.headers.get("x-requests-remaining", 0))
+        plan = used + int(rem)
+        day  = datetime.now().day
+        days_in_month = 31
+        pace = used / max(day, 1) * days_in_month
+        print(f"  used {used:,} of {plan:,} this period ({used/max(plan,1)*100:.1f}%)")
+        print(f"  day {day} of the month — on pace for {pace:,.0f}")
+        if pace > plan:
+            add("FAIL", "API credits",
+                f"on pace for {pace:,.0f} against a {plan:,} plan — will run out "
+                f"before month end (used {used:,} by day {day})")
+        elif pace > plan * 0.85:
+            add("WARN", "API credits",
+                f"on pace for {pace:,.0f} of {plan:,} ({pace/plan*100:.0f}%) — tight")
+        else:
+            print(f"  headroom fine ({pace/plan*100:.0f}% of plan at this pace)")
+    else:
+        print("  (ODDS_API_KEY not set — skipped)")
+except Exception as e:
+    print(f"  [skipped] {e}")
+
+
 # ── known and accepted ───────────────────────────────────────────────────────
 # Findings that are real but permanent, triaged 2026-08-10. Without this the tab
 # reads NEEDS ATTENTION every single day for things nobody is going to act on, and

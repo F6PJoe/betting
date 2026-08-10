@@ -15,23 +15,47 @@ name: MLB Line Snapshots (CLV)
 # that wherever the runs actually land, one sits close to every game.
 #
 # On the old 2-hour grid most games were priced against a line 1-2 hours stale
-# (7:46pm game -> last snapshot 6:00pm = 106 minutes). Hourly roughly halves that.
+# (7:46pm game -> last snapshot 6:00pm = 106 minutes). Every 30 minutes cuts the
+# worst case to roughly half an hour.
 #
 # Each pass is lines-only: 3 credits flat plus 1 per upcoming game, so ~18 early in
-# the day falling to ~4 late. About 3,600/month against an 18,000 headroom.
+# the day falling to ~4 late. Passes after the last first pitch return no games, and
+# empty responses are free per the API docs — which is why the window runs to 11pm.
+# It costs nothing and insures against a late start.
+#
+#     every 30 min  ->  ~302/day snapshots + 78 morning props = 11,400/month
+#     with NFL at similar game-day density                    = ~14,400/month (72%)
+#
+# Every 20 minutes was modelled and rejected: 18,750/month leaves under 1,300 credits
+# of margin, so one heavy slate or a costlier-than-expected NFL props build would hit
+# the wall mid-month. Credit usage is now reported on the Pipeline Health tab.
 on:
   schedule:
-    - cron: '0 15 * * *'   # 11:00 AM EDT
-    - cron: '0 16 * * *'   # 12:00 PM EDT
-    - cron: '0 17 * * *'   #  1:00 PM EDT
-    - cron: '0 18 * * *'   #  2:00 PM EDT
-    - cron: '0 19 * * *'   #  3:00 PM EDT
-    - cron: '0 20 * * *'   #  4:00 PM EDT
-    - cron: '0 21 * * *'   #  5:00 PM EDT
-    - cron: '0 22 * * *'   #  6:00 PM EDT
-    - cron: '0 23 * * *'   #  7:00 PM EDT
-    - cron: '0 0 * * *'    #  8:00 PM EDT
-    - cron: '0 1 * * *'    #  9:00 PM EDT — last useful pass before 10:10 starts
+    - cron: '0 15 * * *'      # 11:00 AM ET
+    - cron: '30 15 * * *'     # 11:30 AM ET
+    - cron: '0 16 * * *'      # 12:00 PM ET
+    - cron: '30 16 * * *'     # 12:30 PM ET
+    - cron: '0 17 * * *'      #  1:00 PM ET
+    - cron: '30 17 * * *'     #  1:30 PM ET
+    - cron: '0 18 * * *'      #  2:00 PM ET
+    - cron: '30 18 * * *'     #  2:30 PM ET
+    - cron: '0 19 * * *'      #  3:00 PM ET
+    - cron: '30 19 * * *'     #  3:30 PM ET
+    - cron: '0 20 * * *'      #  4:00 PM ET
+    - cron: '30 20 * * *'     #  4:30 PM ET
+    - cron: '0 21 * * *'      #  5:00 PM ET
+    - cron: '30 21 * * *'     #  5:30 PM ET
+    - cron: '0 22 * * *'      #  6:00 PM ET
+    - cron: '30 22 * * *'     #  6:30 PM ET
+    - cron: '0 23 * * *'      #  7:00 PM ET
+    - cron: '30 23 * * *'     #  7:30 PM ET
+    - cron: '0 0 * * *'       #  8:00 PM ET
+    - cron: '30 0 * * *'      #  8:30 PM ET
+    - cron: '0 1 * * *'       #  9:00 PM ET
+    - cron: '30 1 * * *'      #  9:30 PM ET
+    - cron: '0 2 * * *'       # 10:00 PM ET
+    - cron: '30 2 * * *'      # 10:30 PM ET
+    - cron: '0 3 * * *'       # 11:00 PM ET
   workflow_dispatch:        # allows manual trigger
 
 env:
