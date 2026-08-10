@@ -3158,10 +3158,21 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     lookup built from ALL evaluated bets (not just edge picks). Allows CLV to be
     populated even when a morning pick no longer has an edge at the update time.
     """
+    # Six line-snapshot passes now run (12, 2, 4, 6, 8, 10pm ET) rather than two.
+    # Passes before 3pm land in the "12:30" columns, later ones in the "6:30" columns,
+    # each overwriting the previous — which gives the right answer for free:
+    # a matched row is only rewritten while its game is STILL on the board, so once a
+    # game starts it drops out of the odds feed, stops matching, and keeps whatever
+    # line was captured just before first pitch.
+    #
+    # So a 1:05pm game holds its near-closing line in the "12:30" columns and a 7:05pm
+    # game holds its own in the "6:30" columns. Neither column is "the" closing line on
+    # its own — the LAST populated one for a given row is. That is why the old fixed
+    # 6:30 pass left afternoon games blank: by then they had already finished.
     hour = datetime.now(EASTERN).hour
-    if hour < 15:  # 12:30 PM run
+    if hour < 15:
         col_line, col_juice, col_clv = "12:30 Line", "12:30 Juice", "12:30 CLV%"
-    else:           # 6:30 PM run
+    else:
         col_line, col_juice, col_clv = "6:30 Line", "6:30 Juice", "6:30 CLV%"
 
     ci = {h: i for i, h in enumerate(HISTORY_HEADER)}

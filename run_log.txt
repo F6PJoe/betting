@@ -1,0 +1,350 @@
+[1/3] Fetching odds... 
+Traceback (most recent call last):
+  File "C:\Users\corpo\Betting Models\fetch_odds.py", line 233, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\corpo\Betting Models\fetch_odds.py", line 148, in main
+    _log_fh = open(LOG_FILE, "a", encoding="utf-8")
+PermissionError: [Errno 13] Permission denied: 'C:\\Users\\corpo\\Betting Models\\run_log.txt'
+[2/3] Analyzing edges... 
+Traceback (most recent call last):
+  File "C:\Users\corpo\Betting Models\analyze_edges.py", line 3073, in <module>
+    _log_fh_outer = open(LOG_FILE, "a", encoding="utf-8")
+PermissionError: [Errno 13] Permission denied: 'C:\\Users\\corpo\\Betting Models\\run_log.txt'
+[3/3] Grading yesterday's bets... 
+Traceback (most recent call last):
+  File "C:\Users\corpo\Betting Models\grade_bets.py", line 1837, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\corpo\Betting Models\grade_bets.py", line 1205, in main
+    _log_fh = open(LOG_FILE, "a", encoding="utf-8")
+PermissionError: [Errno 13] Permission denied: 'C:\\Users\\corpo\\Betting Models\\run_log.txt'
+Done. 
+
+============================================================
+fetch_odds.py run at 2026-08-04 17:43:08
+============================================================
+
+Fetching markets=h2h,spreads,totals ...
+  30 games -> 586 rows parsed
+
+Fetching markets=alternate_totals ...
+  [skip] alternate_totals returned 422 — endpoint unavailable on free plan
+
+Fetching per-event odds (team_totals,pitcher_strikeouts,batter_total_bases,batter_home_runs,batter_hits_runs_rbis) ...
+  Los Angeles Angels @ Baltimore Orioles: 206 rows
+  Athletics @ Cincinnati Reds: 232 rows
+  New York Mets @ Cleveland Guardians: 232 rows
+  Washington Nationals @ Philadelphia Phillies: 205 rows
+  St. Louis Cardinals @ New York Yankees: 212 rows
+  Chicago White Sox @ Boston Red Sox: 228 rows
+  Miami Marlins @ Atlanta Braves: 234 rows
+  Pittsburgh Pirates @ Milwaukee Brewers: 199 rows
+  Minnesota Twins @ Kansas City Royals: 242 rows
+  Los Angeles Dodgers @ Chicago Cubs: 214 rows
+  San Francisco Giants @ Texas Rangers: 212 rows
+  Toronto Blue Jays @ Houston Astros: 228 rows
+  Tampa Bay Rays @ Colorado Rockies: 233 rows
+  San Diego Padres @ Arizona Diamondbacks: 214 rows
+  Detroit Tigers @ Seattle Mariners: 208 rows
+  Toronto Blue Jays @ Houston Astros: 0 rows
+  Los Angeles Dodgers @ Chicago Cubs: 0 rows
+  San Francisco Giants @ Texas Rangers: 0 rows
+  Tampa Bay Rays @ Colorado Rockies: 0 rows
+  Los Angeles Angels @ Baltimore Orioles: 0 rows
+  Athletics @ Cincinnati Reds: 0 rows
+  New York Mets @ Cleveland Guardians: 0 rows
+  Washington Nationals @ Philadelphia Phillies: 0 rows
+  St. Louis Cardinals @ New York Yankees: 0 rows
+  Chicago White Sox @ Boston Red Sox: 0 rows
+  Miami Marlins @ Atlanta Braves: 0 rows
+  Pittsburgh Pirates @ Milwaukee Brewers: 0 rows
+  Minnesota Twins @ Kansas City Royals: 0 rows
+  San Diego Padres @ Arizona Diamondbacks: 0 rows
+  Detroit Tigers @ Seattle Mariners: 0 rows
+
+Connecting to Google Sheets ...
+  Wrote 586 game rows + 3299 prop rows to 'MLB Odds' tab
+
+API credits used: 359  |  remaining: 19641
+
+Done.
+
+============================================================
+analyze_edges.py run at 2026-08-04 17:43:28
+============================================================
+analyze_edges.py: completed successfully
+
+============================================================
+analyze_edges.py run at 2026-08-04 18:04:45
+============================================================
+analyze_edges.py: completed successfully
+
+============================================================
+analyze_edges.py run at 2026-08-04 18:18:25
+============================================================
+analyze_edges.py: completed successfully
+
+============================================================
+analyze_edges.py run at 2026-08-04 18:25:28
+============================================================
+analyze_edges.py: completed successfully
+
+============================================================
+fetch_odds.py run at 2026-08-04 18:30:01
+============================================================
+
+Fetching markets=h2h,spreads,totals ...
+  30 games -> 586 rows parsed
+
+Fetching markets=alternate_totals ...
+  [skip] alternate_totals returned 422 — endpoint unavailable on free plan
+
+Fetching per-event odds (team_totals,pitcher_strikeouts,batter_total_bases,batter_home_runs,batter_hits_runs_rbis) ...
+  Los Angeles Angels @ Baltimore Orioles: 206 rows
+  Athletics @ Cincinnati Reds: 232 rows
+  Washington Nationals @ Philadelphia Phillies: 211 rows
+  New York Mets @ Cleveland Guardians: 232 rows
+  St. Louis Cardinals @ New York Yankees: 206 rows
+  Chicago White Sox @ Boston Red Sox: 228 rows
+  Miami Marlins @ Atlanta Braves: 234 rows
+  Pittsburgh Pirates @ Milwaukee Brewers: 198 rows
+  Minnesota Twins @ Kansas City Royals: 242 rows
+  Los Angeles Dodgers @ Chicago Cubs: 218 rows
+  San Francisco Giants @ Texas Rangers: 212 rows
+  Toronto Blue Jays @ Houston Astros: 228 rows
+  Tampa Bay Rays @ Colorado Rockies: 245 rows
+  San Diego Padres @ Arizona Diamondbacks: 210 rows
+  Detroit Tigers @ Seattle Mariners: 232 rows
+  Toronto Blue Jays @ Houston Astros: 0 rows
+  Los Angeles Dodgers @ Chicago Cubs: 0 rows
+  San Francisco Giants @ Texas Rangers: 0 rows
+  Tampa Bay Rays @ Colorado Rockies: 0 rows
+  Los Angeles Angels @ Baltimore Orioles: 0 rows
+  Athletics @ Cincinnati Reds: 0 rows
+  New York Mets @ Cleveland Guardians: 0 rows
+  Washington Nationals @ Philadelphia Phillies: 0 rows
+  St. Louis Cardinals @ New York Yankees: 0 rows
+  Chicago White Sox @ Boston Red Sox: 0 rows
+  Miami Marlins @ Atlanta Braves: 0 rows
+  Pittsburgh Pirates @ Milwaukee Brewers: 0 rows
+  Minnesota Twins @ Kansas City Royals: 0 rows
+  San Diego Padres @ Arizona Diamondbacks: 0 rows
+  Detroit Tigers @ Seattle Mariners: 0 rows
+
+Connecting to Google Sheets ...
+  Wrote 586 game rows + 3334 prop rows to 'MLB Odds' tab
+
+API credits used: 441  |  remaining: 19559
+
+Done.
+
+============================================================
+analyze_edges.py run at 2026-08-04 18:30:19
+============================================================
+analyze_edges.py: completed successfully
+
+============================================================
+analyze_edges.py run at 2026-08-04 18:40:54
+============================================================
+analyze_edges.py: completed successfully
+
+============================================================
+grade_bets.py run at 2026-08-05 09:25:29
+Grading date: 2026-08-04
+============================================================
+
+Fetching MLB scores from Stats API ...
+  15 completed games found
+
+Connecting to Google Sheets ...
+
+Grading Bet History ...
+  0 bets graded
+
+Grading ML RL Shadow ...
+  0 shadow rows graded
+
+Grading Game Total Shadow ...
+  0 game total shadow rows graded
+
+Grading Team Totals ...
+  0 team total rows graded
+
+Grading Player Props Shadow ...
+  Fetching per-player box score stats ...
+  779 player stat lines loaded
+  445 prop rows graded
+
+Rebuilding Performance tab ...
+
+Venue calibration report ...
+
+Running park factor tracker ...
+
+Checking edge calibration thresholds ...
+
+Checking Team Total star-tier calibration ...
+
+Done.
+
+── RUN SUMMARY ──────────────────────────────────────────────
+  Scores fetched:       15 games
+  Bet History graded:   0
+  ML/RL shadow graded:  0
+  GT shadow graded:     0
+  Team Totals graded:   0
+  Player Props graded:  445
+  WARNINGS (1):
+    - Bet History: 0 bets graded despite having scores — check Pending rows
+─────────────────────────────────────────────────────────────
+
+============================================================
+grade_bets.py run at 2026-08-05 09:41:30
+Grading date: 2026-08-04
+============================================================
+
+Fetching MLB scores from Stats API ...
+  15 completed games found
+
+Connecting to Google Sheets ...
+
+Grading Bet History ...
+  0 bets graded
+  (all 30 rows for 2026-08-04 already graded)
+
+Grading ML RL Shadow ...
+  0 shadow rows graded
+
+Grading Game Total Shadow ...
+  0 game total shadow rows graded
+
+Grading Team Totals ...
+  0 team total rows graded
+
+Grading Player Props Shadow ...
+  Fetching per-player box score stats ...
+  779 player stat lines loaded
+  27 prop rows graded
+
+Rebuilding Performance tab ...
+
+Venue calibration report ...
+
+Running park factor tracker ...
+
+Checking edge calibration thresholds ...
+
+Checking Team Total star-tier calibration ...
+
+Done.
+
+── RUN SUMMARY ──────────────────────────────────────────────
+  Scores fetched:       15 games
+  Bet History graded:   0
+  ML/RL shadow graded:  0
+  GT shadow graded:     0
+  Team Totals graded:   0
+  Player Props graded:  27
+  Status: ALL OK
+─────────────────────────────────────────────────────────────
+
+============================================================
+grade_bets.py run at 2026-08-07 09:23:36
+Grading date: 2026-08-06
+============================================================
+
+Fetching MLB scores from Stats API ...
+  11 completed games found
+
+Connecting to Google Sheets ...
+
+Grading Bet History ...
+  0 bets graded
+  (all 9 rows for 2026-08-06 already graded)
+
+Grading ML RL Shadow ...
+  0 shadow rows graded
+
+Grading Game Total Shadow ...
+  0 game total shadow rows graded
+
+Grading Team Totals ...
+  0 team total rows graded
+
+Grading Player Props Shadow ...
+  Fetching per-player box score stats ...
+  572 player stat lines loaded
+  0 prop rows graded
+
+Rebuilding Performance tab ...
+
+Venue calibration report ...
+
+Running park factor tracker ...
+
+Checking edge calibration thresholds ...
+
+Checking Team Total star-tier calibration ...
+
+Done.
+
+── RUN SUMMARY ──────────────────────────────────────────────
+  Scores fetched:       11 games
+  Bet History graded:   0
+  ML/RL shadow graded:  0
+  GT shadow graded:     0
+  Team Totals graded:   0
+  Player Props graded:  0
+  Status: ALL OK
+─────────────────────────────────────────────────────────────
+
+============================================================
+grade_bets.py run at 2026-08-07 09:32:50
+Grading date: 2026-08-06
+============================================================
+
+Fetching MLB scores from Stats API ...
+  11 completed games found
+
+Connecting to Google Sheets ...
+
+Grading Bet History ...
+  0 bets graded
+  (all 9 rows for 2026-08-06 already graded)
+
+Grading ML RL Shadow ...
+  0 shadow rows graded
+
+Grading Game Total Shadow ...
+  0 game total shadow rows graded
+
+Grading Team Totals ...
+  0 team total rows graded
+
+Grading Player Props Shadow ...
+  Fetching per-player box score stats ...
+  572 player stat lines loaded
+  0 prop rows graded
+
+Rebuilding Performance tab ...
+
+Venue calibration report ...
+
+Running park factor tracker ...
+
+Checking edge calibration thresholds ...
+
+Checking Team Total star-tier calibration ...
+
+Done.
+
+── RUN SUMMARY ──────────────────────────────────────────────
+  Scores fetched:       11 games
+  Bet History graded:   0
+  ML/RL shadow graded:  0
+  GT shadow graded:     0
+  Team Totals graded:   0
+  Player Props graded:  0
+  Status: ALL OK
+─────────────────────────────────────────────────────────────

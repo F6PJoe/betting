@@ -12,7 +12,12 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # ── Config ────────────────────────────────────────────────────────────────────
-ODDS_API_KEY   = os.environ["ODDS_API_KEY_NFL"]
+# Credits are pooled per ACCOUNT, not per sport — the 20,000/month plan is spendable
+# on any sport. ODDS_API_KEY_NFL was a separate FREE 500-credit signup that predates
+# the paid upgrade, and 500 will not cover a single NFL week once props are built
+# (16 games x ~6 markets = ~96 credits per pass). Falls back to the old key only if
+# the paid one is somehow absent.
+ODDS_API_KEY   = os.environ.get("ODDS_API_KEY") or os.environ["ODDS_API_KEY_NFL"]
 NFL_SHEET_ID   = "1UPempH9iWF-DQFh5d26zjpft3-XLehp30PZPfE0tpsE"
 CREDS_FILE     = os.path.join(os.path.dirname(__file__), "google_credentials.json")
 

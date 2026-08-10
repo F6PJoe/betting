@@ -1,9 +1,21 @@
-name: MLB Afternoon/Evening Update
+name: MLB Line Snapshots (CLV)
 
+# Line snapshots through the day. These passes fetch LINES ONLY — no player props —
+# which costs 1 credit/game instead of 5. That is what makes running six of them
+# cheaper than the two full prop refetches this replaced.
+#
+# Spread across the afternoon and evening so that every game, whatever time it
+# starts, has a snapshot shortly before its own first pitch. A single fixed time
+# cannot do that for a slate running 1pm to 10pm ET: at 6:30pm the afternoon games
+# have already finished, which is why 6:30 CLV was empty for most of the slate.
 on:
   schedule:
-    - cron: '30 16 * * *'  # 12:30 PM EDT (UTC-4)
-    - cron: '30 22 * * *'  #  6:30 PM EDT (UTC-4)
+    - cron: '0 16 * * *'   # 12:00 PM EDT — before the 1:05 starts
+    - cron: '0 18 * * *'   #  2:00 PM EDT
+    - cron: '0 20 * * *'   #  4:00 PM EDT — before the 4:05 starts
+    - cron: '0 22 * * *'   #  6:00 PM EDT — before the 7:05 starts
+    - cron: '0 0 * * *'    #  8:00 PM EDT
+    - cron: '0 2 * * *'    # 10:00 PM EDT — late West Coast starts
   workflow_dispatch:        # allows manual trigger
 
 env:
@@ -32,11 +44,15 @@ jobs:
       - name: Create .env file
         run: echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
 
-      - name: Fetch updated odds
-        run: python fetch_odds.py
+      # --lines-only: h2h/spreads/totals + team_totals, no player props.
+      # 18 credits for a 15-game slate instead of 78.
+      - name: Fetch lines (no player props)
+        run: python fetch_odds.py --lines-only
 
       - name: Pause
         run: sleep 30
 
-      - name: Update CLV snapshots
+      # --force routes this to the CLV update path and skips every snapshot rewrite,
+      # so the shadow tabs keep their morning data.
+      - name: Update CLV + capture Line History
         run: python analyze_edges.py --force

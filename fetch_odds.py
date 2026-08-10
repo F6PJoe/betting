@@ -7,10 +7,14 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import argparse
 import sys
 import os
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+EASTERN = ZoneInfo("America/New_York")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ODDS_API_KEY   = os.environ.get("ODDS_API_KEY", "")
@@ -38,9 +42,31 @@ COMMON_PARAMS  = {
     "dateFormat":  "iso",
 }
 TEAM_TOTAL_MARKETS  = "team_totals"
-# Player prop markets — DO NOT enable until upgraded to paid API credits plan
-# PLAYER_PROP_MARKETS = "pitcher_strikeouts,batter_total_bases,batter_home_runs,batter_hits_runs_rbis"
+PLAYER_PROP_MARKETS = "pitcher_strikeouts,batter_total_bases,batter_home_runs,batter_hits_runs_rbis"
 FETCH_PLAYER_PROPS  = True   # enabled 2026-07-09 after API upgrade to paid plan
+
+# ── Credit economics (measured live against the API 2026-08-10) ───────────────
+#   /events (game list)                       0   free
+#   main odds h2h,spreads,totals              3   flat, regardless of game count
+#   per-event team_totals ALONE               1   per game
+#   per-event team_totals + 4 prop markets    5   per game
+#
+# Player props were being refetched on EVERY run (3-4x/day at 5 credits/game) when
+# once is enough — they are shadow-only and bet off the morning slate. The afternoon
+# and evening passes only need LINES, for CLV, and lines unbundled cost 1/game.
+# Running those passes with --lines-only cuts a 15-game slate from 78 credits to 18.
+#
+# commenceTimeTo trims the request to today's games. Without it the evening run buys
+# player props for TOMORROW's slate, which the next morning's run then refetches.
+# The cutoff is end-of-day EASTERN, not UTC: a 10:05pm ET first pitch is already
+# past midnight UTC, so a UTC day boundary would silently drop the late slate.
+# Tomorrow's earliest game is ~12:35pm ET, so end-of-day ET separates them cleanly.
+
+
+def today_et_cutoff() -> str:
+    """End of today in ET, as a UTC ISO8601 string for the commenceTimeTo param."""
+    end_et = datetime.now(EASTERN).replace(hour=23, minute=59, second=59, microsecond=0)
+    return end_et.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -56,8 +82,14 @@ def get_sheet(sheet_id: str, tab_name: str):
 
 # ── Odds fetching ─────────────────────────────────────────────────────────────
 def fetch_market(markets: str) -> tuple[list[dict], dict]:
-    """Return (games_json, headers_dict) for one markets= request."""
-    params = {**COMMON_PARAMS, "markets": markets}
+    """Return (games_json, headers_dict) for one markets= request.
+
+    Filtered to today's ET slate — see today_et_cutoff(). The filter is free (cost is
+    markets x regions either way) and it keeps tomorrow's games out of all_games,
+    which is what drives the per-event loop below.
+    """
+    params = {**COMMON_PARAMS, "markets": markets,
+              "commenceTimeTo": today_et_cutoff()}
     try:
         resp = requests.get(BASE_URL, params=params, timeout=30)
         if resp.status_code == 422:
@@ -144,11 +176,19 @@ def parse_prop_rows(event: dict) -> list[list]:
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     global _log_fh
+    ap = argparse.ArgumentParser(description="Fetch MLB odds into the MLB Odds tab")
+    ap.add_argument("--lines-only", action="store_true",
+                    help="skip player props; fetch only h2h/spreads/totals + team_totals. "
+                         "Use for the afternoon/evening CLV passes — props only need "
+                         "fetching once a day and cost 5 credits/game vs 1 for lines.")
+    args = ap.parse_args()
+
     run_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _log_fh = open(LOG_FILE, "a", encoding="utf-8")
     log("")
     log("=" * 60)
-    log(f"fetch_odds.py run at {run_ts}")
+    log(f"fetch_odds.py run at {run_ts}"
+        + ("  [LINES ONLY — no player props]" if args.lines_only else ""))
     log("=" * 60)
 
     all_rows   = []
@@ -173,10 +213,12 @@ def main():
     skipped   = 0
 
     markets_to_fetch = TEAM_TOTAL_MARKETS
-    if FETCH_PLAYER_PROPS:
-        markets_to_fetch += ",pitcher_strikeouts,batter_total_bases,batter_home_runs,batter_hits_runs_rbis"
+    if FETCH_PLAYER_PROPS and not args.lines_only:
+        markets_to_fetch += "," + PLAYER_PROP_MARKETS
 
+    est = 1 if args.lines_only else 5
     log(f"\nFetching per-event odds ({markets_to_fetch}) ...")
+    log(f"  ~{est} credit(s) per game on this pass")
     for game in all_games:
         commence_raw = game.get("commence_time", "")
         try:

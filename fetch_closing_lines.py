@@ -23,7 +23,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ODDS_SHEET_ID = "1RaSm1ogJtNykM7WbYfQ3b9L7MUePcRBqlFMKuQfA_I4"
-ODDS_API_KEY  = os.environ["ODDS_API_KEY_NFL"]
+# Credits pool per account, not per sport — use the paid 20,000 plan, not the
+# leftover free 500-credit key. See nfl_fetch_odds.py for the full note.
+ODDS_API_KEY  = os.environ.get("ODDS_API_KEY") or os.environ["ODDS_API_KEY_NFL"]
 CREDS_FILE    = os.path.join(os.path.dirname(__file__), "google_credentials.json")
 
 SCOPES = [
