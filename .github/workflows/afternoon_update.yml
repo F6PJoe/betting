@@ -8,14 +8,30 @@ name: MLB Line Snapshots (CLV)
 # starts, has a snapshot shortly before its own first pitch. A single fixed time
 # cannot do that for a slate running 1pm to 10pm ET: at 6:30pm the afternoon games
 # have already finished, which is why 6:30 CLV was empty for most of the slate.
+# HOURLY, 11am-9pm ET. Measured 2026-08-10: GitHub fires these 29-57 minutes late
+# (08:00 -> 08:44, 08:00 -> 08:47, 18:30 -> 18:59, 12:30 -> 13:27). With that much
+# jitter you cannot aim a snapshot at a kickoff — one set for 6:45pm can land at
+# 7:30, after first pitch. Density is the answer, not precision: run often enough
+# that wherever the runs actually land, one sits close to every game.
+#
+# On the old 2-hour grid most games were priced against a line 1-2 hours stale
+# (7:46pm game -> last snapshot 6:00pm = 106 minutes). Hourly roughly halves that.
+#
+# Each pass is lines-only: 3 credits flat plus 1 per upcoming game, so ~18 early in
+# the day falling to ~4 late. About 3,600/month against an 18,000 headroom.
 on:
   schedule:
-    - cron: '0 16 * * *'   # 12:00 PM EDT — before the 1:05 starts
+    - cron: '0 15 * * *'   # 11:00 AM EDT
+    - cron: '0 16 * * *'   # 12:00 PM EDT
+    - cron: '0 17 * * *'   #  1:00 PM EDT
     - cron: '0 18 * * *'   #  2:00 PM EDT
-    - cron: '0 20 * * *'   #  4:00 PM EDT — before the 4:05 starts
-    - cron: '0 22 * * *'   #  6:00 PM EDT — before the 7:05 starts
+    - cron: '0 19 * * *'   #  3:00 PM EDT
+    - cron: '0 20 * * *'   #  4:00 PM EDT
+    - cron: '0 21 * * *'   #  5:00 PM EDT
+    - cron: '0 22 * * *'   #  6:00 PM EDT
+    - cron: '0 23 * * *'   #  7:00 PM EDT
     - cron: '0 0 * * *'    #  8:00 PM EDT
-    - cron: '0 2 * * *'    # 10:00 PM EDT — late West Coast starts
+    - cron: '0 1 * * *'    #  9:00 PM EDT — last useful pass before 10:10 starts
   workflow_dispatch:        # allows manual trigger
 
 env:
