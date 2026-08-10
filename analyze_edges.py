@@ -1491,7 +1491,7 @@ def load_prop_odds(gc) -> list[dict]:
 # projection provably has none (see GT_FLAT_UNITS and gt_projection_audit.py; four
 # separate repairs all failed out-of-sample).
 #
-# This tab is APPEND-ONLY and runs on every pass (8:00 / 12:30 / 6:30), so it
+# This tab is APPEND-ONLY and runs on every pass (8am + 12/2/4/6/8/10pm), so it
 # records both cross-book disagreement (same game+market, one run) and line
 # movement (same game+market+book, across runs). Purely additive: nothing reads it
 # yet and no betting logic depends on it. It exists to make the market-based
@@ -2328,8 +2328,9 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                     "", "", "", "Pending", "",
                     park_factor, "", conf_label, conf_pct_str,
                     f"{round(edge_pct, 2)}%",
-                    "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
-                    "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
+                    "", "", "",              # Mid Line/Juice/CLV%
+                    "", "", "",              # Close Line/Juice/CLV%
+                    "", "",                  # Line CLV, Snapshots
                 ]
                 # Fill Time (ET) from game data
                 g_data = game_by_teams.get((home, away), {})
@@ -2791,8 +2792,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
             "", "", "", "Pending", "",
             best["park_factor"], best["venue"], best["conf"], f"{conf_pct}%",
             "",
-            "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
-            "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
+            "", "", "",              # Mid Line/Juice/CLV%
+            "", "", "",              # Close Line/Juice/CLV%
+            "", "",                  # Line CLV, Snapshots
         ])
 
     # ── Build ML/RL Bet History rows (4+ star, has_sp, not Athletics home) ─────
@@ -2812,8 +2814,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
-                "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
-                "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
+                "", "", "",              # Mid Line/Juice/CLV%
+                "", "", "",              # Close Line/Juice/CLV%
+                "", "",                  # Line CLV, Snapshots
             ])
         else:  # Run Line
             rl_bet_on = f"{abbrev(s['bet_team'])} {s['spread']:+.1f}"
@@ -2827,8 +2830,9 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
-                "", "",                  # Closing Line, CLV (fetch_closing_lines.py)
-                "", "", "", "", "", "",  # 12:30 Line/Juice/CLV%, 6:30 Line/Juice/CLV%
+                "", "", "",              # Mid Line/Juice/CLV%
+                "", "", "",              # Close Line/Juice/CLV%
+                "", "",                  # Line CLV, Snapshots
             ])
 
     # ── Build ML/RL shadow rows from best-line-per-signal dict ──────────────
@@ -2879,7 +2883,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
     # Build comprehensive CLV lines lookup (ALL evaluated bets, not just edges).
     # Used by _clv_update_hist so afternoon runs can populate CLV columns even
-    # when a morning pick no longer has an edge at 12:30/6:30.
+    # when a morning pick no longer has an edge at a later snapshot.
     clv_lines = {}
     for (gid, direction), g in best_gt_shadow_per_game_dir.items():
         key = (g["game_label"], "Game Total", direction, "")
@@ -2982,9 +2986,19 @@ HISTORY_HEADER = [
     "Edge (runs)", "Away Score", "Home Score", "Actual Total",
     "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %",
     "Edge %",
-    "12:30 Line", "12:30 Juice", "12:30 CLV%", # populated by 12:30 PM run
-    "6:30 Line",  "6:30 Juice",  "6:30 CLV%",  # populated by 6:30 PM run
-    "Closing Line", "CLV",                      # populated by fetch_closing_lines.py
+    # Renamed 2026-08-10. Six line snapshots now run (12/2/4/6/8/10pm ET), not two,
+    # so "12:30"/"6:30" no longer described what these held. Positions are unchanged,
+    # so existing data keeps its meaning: the old 12:30 pair was the midday capture
+    # and the old 6:30 pair was the latest one.
+    "Mid Line",   "Mid Juice",   "Mid CLV%",    # last capture before 3pm ET
+    "Close Line", "Close Juice", "Close CLV%",  # last capture before first pitch
+    # Line CLV is the movement in RUNS, signed so positive always means the number
+    # moved in our favour (bet U5.5, closes 6.5 -> +1.0). For totals this matters more
+    # than the price: a full run is worth far more than a few cents of juice, and it
+    # was previously recorded as nothing at all whenever the line moved.
+    # Snapshots = how many captures this bet was seen in; 1 means the CLV rests on a
+    # single reading and should be read accordingly.
+    "Line CLV", "Snapshots",
 ]
 
 SHADOW_HEADER = [
@@ -3143,7 +3157,7 @@ def _format_proj_column(ws_hist, written_rows, start_row=2):
             # multiply by 100 — the exact trap that made "Our Projection" and DK Juice
             # render as 1425.00% and -11300.00%.
             clv_fmt = {"numberFormat": {"type": "NUMBER", "pattern": '+0.00"%";-0.00"%";0.00"%"'}}
-            for cname in ("12:30 CLV%", "6:30 CLV%", "CLV"):
+            for cname in ("Mid CLV%", "Close CLV%"):
                 if cname in HISTORY_HEADER:
                     cc = _col_letter(HISTORY_HEADER.index(cname))
                     batch.append({"range": f"{cc}{start_row}:{cc}{end_row}", "format": clv_fmt})
@@ -3169,21 +3183,21 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     populated even when a morning pick no longer has an edge at the update time.
     """
     # Six line-snapshot passes now run (12, 2, 4, 6, 8, 10pm ET) rather than two.
-    # Passes before 3pm land in the "12:30" columns, later ones in the "6:30" columns,
+    # Passes before 3pm land in the Mid columns, later ones in the Close columns,
     # each overwriting the previous — which gives the right answer for free:
     # a matched row is only rewritten while its game is STILL on the board, so once a
     # game starts it drops out of the odds feed, stops matching, and keeps whatever
     # line was captured just before first pitch.
     #
-    # So a 1:05pm game holds its near-closing line in the "12:30" columns and a 7:05pm
-    # game holds its own in the "6:30" columns. Neither column is "the" closing line on
+    # So a 1:05pm game holds its near-closing line in the Mid columns and a 7:05pm
+    # game holds its own in the Close columns. Neither column is "the" closing line on
     # its own — the LAST populated one for a given row is. That is why the old fixed
-    # 6:30 pass left afternoon games blank: by then they had already finished.
+    # fixed 6:30 pass left afternoon games blank: by then they had already finished.
     hour = datetime.now(EASTERN).hour
     if hour < 15:
-        col_line, col_juice, col_clv = "12:30 Line", "12:30 Juice", "12:30 CLV%"
+        col_line, col_juice, col_clv = "Mid Line", "Mid Juice", "Mid CLV%"
     else:
-        col_line, col_juice, col_clv = "6:30 Line", "6:30 Juice", "6:30 CLV%"
+        col_line, col_juice, col_clv = "Close Line", "Close Juice", "Close CLV%"
 
     ci = {h: i for i, h in enumerate(HISTORY_HEADER)}
 
@@ -3252,8 +3266,9 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     h_confpct_col = ci["Confidence %"]
 
     # CLV column indices that can hold misplaced data from a prior stale run
-    _clv_cols = [ci["12:30 Line"], ci["12:30 Juice"], ci["12:30 CLV%"],
-                 ci["6:30 Line"],  ci["6:30 Juice"],  ci["6:30 CLV%"]]
+    _clv_cols = [ci["Mid Line"],   ci["Mid Juice"],   ci["Mid CLV%"],
+                 ci["Close Line"], ci["Close Juice"], ci["Close CLV%"],
+                 ci["Line CLV"],   ci["Snapshots"]]
 
     # Parse juice from UNFORMATTED values — display strings carry whatever format the
     # cell drifted into, which is what silently broke CLV. Row CONTENT still comes from
@@ -3275,6 +3290,8 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
             for idx in _clv_cols:
                 row[idx] = ""
         key = _bet_key(row)
+        btype_row = str(row[ci["Bet Type"]]).strip() if len(row) > ci["Bet Type"] else ""
+        direc_row = str(row[ci["Direction"]]).strip() if len(row) > ci["Direction"] else ""
         # Prefer the comprehensive all-lines lookup (covers bets that lost their edge);
         # fall back to edge-only fresh_lookup if clv_lines not available.
         all_lines = clv_lines or {}
@@ -3304,6 +3321,33 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
             bl_n, nl_n = _lnum(row[ci["Book Line"]]), _lnum(new_line)
             line_moved = (bl_n is not None and nl_n is not None
                           and abs(bl_n - nl_n) > 1e-9)
+
+            # Line CLV — the movement in RUNS, signed so positive always means the
+            # number moved our way. Only meaningful for totals: Run Line is fixed at
+            # 1.5 in MLB (only its price moves) and Moneyline has no line at all.
+            if (btype_row in ("Game Total", "Team Total")
+                    and bl_n is not None and nl_n is not None):
+                # Positive = we hold a BETTER number than the market settled on.
+                #   Over 3.5 bet, closes 4.5 -> Over 4.5 is harder, so ours is the
+                #     easier side. delta +1, CLV +1.
+                #   Under 5.5 bet, closes 6.5 -> Under 6.5 is EASIER, so ours is the
+                #     harder side and we got the worse of it. delta +1, CLV -1.
+                # The two directions therefore take opposite signs of the same delta.
+                delta = nl_n - bl_n
+                if direc_row == "Over":
+                    line_clv = delta
+                elif direc_row == "Under":
+                    line_clv = -delta
+                else:
+                    line_clv = None
+                if line_clv is not None:
+                    row[ci["Line CLV"]] = round(line_clv, 2)
+
+            try:
+                seen = int(float(str(row[ci["Snapshots"]]).strip() or 0))
+            except (ValueError, TypeError):
+                seen = 0
+            row[ci["Snapshots"]] = seen + 1
 
             if line_moved:
                 clv_str = ""
@@ -3344,7 +3388,7 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     # Re-inserted rows inherit neighbouring formats — reapply per-bet-type formatting
     # to the overloaded "Our Projection" column.
     _format_proj_column(ws_hist, updated_rows, start_row=2)
-    slot_label = "12:30 PM" if col_clv.startswith("12") else "6:30 PM"
+    slot_label = "midday" if col_clv.startswith("Mid") else "close"
     filled = sum(1 for r in updated_rows if str(r[ci[col_clv]]).strip())
     print(f"  CLV update ({slot_label} slot): {matched}/{len(updated_rows)} rows matched, "
           f"{filled} CLV values written"
@@ -3379,7 +3423,7 @@ def main():
     print(f"  {len(odds_rows)} odds rows loaded")
 
     # Snapshot per-book lines before anything else can overwrite 'MLB Odds'.
-    # Runs on every pass (including --force) — the 12:30/6:30 passes are where
+    # Runs on every pass (including --force) — the afternoon/evening passes are where
     # line movement gets recorded, so skipping them would defeat the purpose.
     capture_line_history(gc, run_now)
 
