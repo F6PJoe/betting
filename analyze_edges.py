@@ -3137,6 +3137,16 @@ def _format_proj_column(ws_hist, written_rows, start_row=2):
             dk_col = _col_letter(HISTORY_HEADER.index("DK Juice"))
             batch.append({"range": f"{dk_col}{start_row}:{dk_col}{end_row}",
                           "format": {"numberFormat": {"type": "NUMBER", "pattern": "0"}}})
+            # CLV columns hold percentage POINTS as a number (1.17 = +1.17%). Pinned to
+            # a literal-% pattern rather than Sheets' PERCENT type on purpose: PERCENT
+            # would store 0.0117 and every UNFORMATTED_VALUE read would need to know to
+            # multiply by 100 — the exact trap that made "Our Projection" and DK Juice
+            # render as 1425.00% and -11300.00%.
+            clv_fmt = {"numberFormat": {"type": "NUMBER", "pattern": '+0.00"%";-0.00"%";0.00"%"'}}
+            for cname in ("12:30 CLV%", "6:30 CLV%", "CLV"):
+                if cname in HISTORY_HEADER:
+                    cc = _col_letter(HISTORY_HEADER.index(cname))
+                    batch.append({"range": f"{cc}{start_row}:{cc}{end_row}", "format": clv_fmt})
     except ValueError:
         pass
 
@@ -3278,7 +3288,14 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
             if am_juice_int is not None and new_juice_int is not None:
                 am_impl  = american_to_implied(am_juice_int)
                 new_impl = american_to_implied(new_juice_int)
-                clv_str  = f"{(new_impl - am_impl) * 100:+.2f}%"
+                # Write a NUMBER in percentage points (1.17), not a string.
+                # "+1.17%" under USER_ENTERED is parsed by Sheets as a FORMULA -- the
+                # leading + is an operator -- and silently collapses to the bare value
+                # 0.0117, while negatives survived as text. That left the column
+                # half decimals and half percent strings. Storing the number and
+                # pinning the display format (see _format_proj_column) keeps
+                # UNFORMATTED_VALUE reads honest: 1.17 means 1.17 points, not 0.0117.
+                clv_str  = round((new_impl - am_impl) * 100, 2)
             else:
                 # Never fail silently again — a blank CLV is invisible, and CLV is the
                 # metric the whole market-edge question rests on.
