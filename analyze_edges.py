@@ -2340,7 +2340,6 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
                     "", "", "", "Pending", "",
                     park_factor, "", conf_label, conf_pct_str,
                     f"{round(edge_pct, 2)}%",
-                    "", "", "",              # Mid Line/Juice/CLV%
                     "", "", "",              # Close Line/Juice/CLV%
                     "", "",                  # Line CLV, Snapshots
                 ]
@@ -2813,7 +2812,6 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
             "", "", "", "Pending", "",
             best["park_factor"], best["venue"], best["conf"], f"{conf_pct}%",
             "",
-            "", "", "",              # Mid Line/Juice/CLV%
             "", "", "",              # Close Line/Juice/CLV%
             "", "",                  # Line CLV, Snapshots
         ])
@@ -2835,7 +2833,6 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
-                "", "", "",              # Mid Line/Juice/CLV%
                 "", "", "",              # Close Line/Juice/CLV%
                 "", "",                  # Line CLV, Snapshots
             ])
@@ -2851,7 +2848,6 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 "", "", "", "Pending", "",
                 s["park_factor"], s["venue"], conf, f"{conf_pct}%",
                 f"{round(s['edge_pct'], 2)}%",
-                "", "", "",              # Mid Line/Juice/CLV%
                 "", "", "",              # Close Line/Juice/CLV%
                 "", "",                  # Line CLV, Snapshots
             ])
@@ -3013,11 +3009,11 @@ HISTORY_HEADER = [
     "Edge (runs)", "Away Score", "Home Score", "Actual Total",
     "Result", "Units Result", "Park Factor", "Venue", "Confidence", "Confidence %",
     "Edge %",
-    # Renamed 2026-08-10. Six line snapshots now run (12/2/4/6/8/10pm ET), not two,
-    # so "12:30"/"6:30" no longer described what these held. Positions are unchanged,
-    # so existing data keeps its meaning: the old 12:30 pair was the midday capture
-    # and the old 6:30 pair was the latest one.
-    "Mid Line",   "Mid Juice",   "Mid CLV%",    # last capture before 3pm ET
+    # The Mid trio was dropped 2026-08-10. It held one arbitrary mid-afternoon reading,
+    # which answered nothing on its own: the comparison that matters is the morning bet
+    # against the LAST price before first pitch. Every snapshot now writes Close, and
+    # because a row stops matching once its game leaves the board, Close naturally ends
+    # up holding the final pre-game number without needing a time-of-day rule.
     "Close Line", "Close Juice", "Close CLV%",  # last capture before first pitch
     # Line CLV is the movement in RUNS, signed so positive always means the number
     # moved in our favour (bet U5.5, closes 6.5 -> +1.0). For totals this matters more
@@ -3184,7 +3180,7 @@ def _format_proj_column(ws_hist, written_rows, start_row=2):
             # multiply by 100 — the exact trap that made "Our Projection" and DK Juice
             # render as 1425.00% and -11300.00%.
             clv_fmt = {"numberFormat": {"type": "NUMBER", "pattern": '+0.00"%";-0.00"%";0.00"%"'}}
-            for cname in ("Mid CLV%", "Close CLV%"):
+            for cname in ("Close CLV%",):
                 if cname in HISTORY_HEADER:
                     cc = _col_letter(HISTORY_HEADER.index(cname))
                     batch.append({"range": f"{cc}{start_row}:{cc}{end_row}", "format": clv_fmt})
@@ -3220,11 +3216,10 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     # game holds its own in the Close columns. Neither column is "the" closing line on
     # its own — the LAST populated one for a given row is. That is why the old fixed
     # fixed 6:30 pass left afternoon games blank: by then they had already finished.
-    hour = datetime.now(EASTERN).hour
-    if hour < 15:
-        col_line, col_juice, col_clv = "Mid Line", "Mid Juice", "Mid CLV%"
-    else:
-        col_line, col_juice, col_clv = "Close Line", "Close Juice", "Close CLV%"
+    # Every pass writes Close. A row only rewrites while its game is still on the
+    # board, so once first pitch passes it stops matching and Close keeps the last
+    # pre-game number — which is what a closing line IS. No time-of-day rule needed.
+    col_line, col_juice, col_clv = "Close Line", "Close Juice", "Close CLV%"
 
     ci = {h: i for i, h in enumerate(HISTORY_HEADER)}
 
@@ -3293,8 +3288,7 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     h_confpct_col = ci["Confidence %"]
 
     # CLV column indices that can hold misplaced data from a prior stale run
-    _clv_cols = [ci["Mid Line"],   ci["Mid Juice"],   ci["Mid CLV%"],
-                 ci["Close Line"], ci["Close Juice"], ci["Close CLV%"],
+    _clv_cols = [ci["Close Line"], ci["Close Juice"], ci["Close CLV%"],
                  ci["Line CLV"],   ci["Snapshots"]]
 
     # Parse juice from UNFORMATTED values — display strings carry whatever format the
@@ -3421,7 +3415,7 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     # Re-inserted rows inherit neighbouring formats — reapply per-bet-type formatting
     # to the overloaded "Our Projection" column.
     _format_proj_column(ws_hist, updated_rows, start_row=2)
-    slot_label = "midday" if col_clv.startswith("Mid") else "close"
+    slot_label = "close"
     filled = sum(1 for r in updated_rows if str(r[ci[col_clv]]).strip())
     print(f"  CLV update ({slot_label} slot): {matched}/{len(updated_rows)} rows matched, "
           f"{filled} CLV values written"
