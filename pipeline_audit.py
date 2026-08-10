@@ -86,28 +86,54 @@ if not any(f[0] == "FAIL" for f in findings):
 print("\n" + "-" * 84)
 print("2. FORMAT DRIFT  (value correct, DISPLAY wrong — this is what bit CLV/DK Juice)")
 print("-" * 84)
+# Whether a %-displaying column stores POINTS (5.53 -> "5.53%") or a FRACTION
+# (0.0553 -> "5.53%") is a design choice, not something inferable from the cell — both
+# render identically. So state it, and check that the DISPLAY matches the STORED value
+# under the stated convention. That turns a guess into a real test:
+#   points   : display must equal stored          ("3.20%" over 3.2   = OK)
+#   fraction : display must equal stored x 100    ("58.5%" over 0.585 = OK)
+# The old rule just flagged any %-display over a value >2, which called correct
+# columns broken (Close CLV%) and would have kept doing so forever.
+# Determined empirically 2026-08-10 by comparing display against stored across every
+# %-rendering column, not by assumption — the first guess had Team Totals.Edge % as
+# points when 607 of its cells store fractions.
+POINTS_COLUMNS = {
+    ("Bet History", "Close CLV%"),        # 1.59 -> "+1.59%"
+    ("Player Props Shadow", "Edge %"),    # 0.4794 -> "0.48%"
+}
+# Everything else (Confidence %, Edge %, Our Projection, Team Totals Edge %) uses
+# Sheets' PERCENT type and stores a fraction: 0.946 -> "94.60%".
+
 drift_found = False
 for tab, (d, u) in TABS.items():
     if len(d) < 2 or not d[0]: continue
     hdr = d[0]
     for ci_, name in enumerate(hdr):
         if not str(name).strip(): continue
+        stores_points = (tab, str(name).strip()) in POINTS_COLUMNS
         bad = 0; sample = None
         for dr, ur in zip(d[1:], u[1:]):
             if len(dr) <= ci_ or len(ur) <= ci_: continue
             disp, raw = str(dr[ci_]).strip(), ur[ci_]
             if not disp.endswith("%"): continue
             if not isinstance(raw, (int, float)): continue
-            # a legitimate percent cell stores a FRACTION (0.585 -> "58.5%").
-            # storing 14.25 or -113 and showing "%" means the format drifted.
-            if abs(raw) > 2:
+            try:
+                shown = float(disp[:-1].replace("+", "").replace(",", ""))
+            except ValueError:
+                continue
+            expected = raw if stores_points else raw * 100.0
+            # Display and stored must agree under the column's stated convention.
+            # A mismatch means the cell's format contradicts what the writer put in it.
+            if abs(shown - expected) > max(0.01, abs(expected) * 0.001):
                 bad += 1
-                if sample is None: sample = (disp, raw)
+                if sample is None: sample = (disp, raw, expected)
         if bad:
             drift_found = True
+            kind = "points" if stores_points else "fraction"
             add("FAIL", f"{tab}.{ascii_(name)}",
-                f"{bad} cells percent-formatted over a non-fraction "
-                f"(e.g. displays {sample[0]!r} but stores {sample[1]!r})")
+                f"{bad} cells whose display contradicts the stored value "
+                f"(declared {kind}: displays {sample[0]!r} over {sample[1]!r}, "
+                f"expected to show {sample[2]:g})")
 if not drift_found:
     print("  (no format drift detected)")
 

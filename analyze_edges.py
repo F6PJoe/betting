@@ -3231,7 +3231,13 @@ def _format_proj_column(ws_hist, written_rows, start_row=2):
             for cname in ("Close CLV%",):
                 if cname in HISTORY_HEADER:
                     cc = _col_letter(HISTORY_HEADER.index(cname))
-                    batch.append({"range": f"{cc}{start_row}:{cc}{end_row}", "format": clv_fmt})
+                    # Pin the WHOLE column, not just the rows written this run. Older
+                    # rows keep whatever format they had, and a PERCENT format left on
+                    # one renders a correct 2.63 (points) as "263.00%" — the value is
+                    # right and the sheet still lies. Formatting the full column costs
+                    # one call and closes that off permanently.
+                    batch.append({"range": f"{cc}2:{cc}{ws_hist.row_count}",
+                                  "format": clv_fmt})
     except ValueError:
         pass
 
