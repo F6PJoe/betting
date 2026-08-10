@@ -45,8 +45,15 @@ print(f"PIPELINE AUDIT — {datetime.now():%Y-%m-%d %H:%M}")
 print("=" * 84)
 
 # ── load every tab once, both render modes ────────────────────────────────
+# Skip our own output tab — its row 1 is a status line, not column headers, so
+# auditing it produces self-referential nonsense like "Pipeline Health.last checked
+# 2026-08-10 17:41: 0 of 25 rows populated".
+SKIP_TABS = {"Pipeline Health"}
+
 TABS = {}
 for w in sh.worksheets():
+    if w.title in SKIP_TABS:
+        continue
     try:
         d = w.get_all_values()
         u = w.get_all_values(value_render_option='UNFORMATTED_VALUE')
@@ -144,10 +151,16 @@ print("-" * 84)
 dead_found = False
 for tab, (d, u) in TABS.items():
     if len(d) < 6 or not d[0]: continue
-    hdr = d[0]; n = len(d) - 1
+    hdr = d[0]
+    # Count DATA rows, not allocated ones. Park Factor Data holds 31 venues in 1,775
+    # allocated rows, so measuring fill against len(d) called every populated column
+    # "1.7% filled" — nine warnings for a tab that is entirely fine.
+    body = [r for r in d[1:] if r and any(str(c).strip() for c in r)]
+    n = len(body)
+    if n < 5: continue
     for ci_, name in enumerate(hdr):
         if not str(name).strip(): continue
-        filled = sum(1 for r in d[1:] if len(r) > ci_ and str(r[ci_]).strip())
+        filled = sum(1 for r in body if len(r) > ci_ and str(r[ci_]).strip())
         if filled == 0:
             dead_found = True
             add("FAIL", f"{tab}.{ascii_(name)}", f"0 of {n} rows populated — never written")
@@ -281,12 +294,64 @@ if "Line History" in TABS:
 else:
     add("FAIL", "Line History", "tab missing entirely")
 
+# ── known and accepted ───────────────────────────────────────────────────────
+# Findings that are real but permanent, triaged 2026-08-10. Without this the tab
+# reads NEEDS ATTENTION every single day for things nobody is going to act on, and
+# a status that is always red is one you stop reading — the same cry-wolf failure
+# that made the old format-drift rule useless.
+# To un-accept something, delete its line. Anything NOT listed here counts.
+ACCEPTED = {
+    "Park Factor Data":
+        "duplicate Venue header; nothing reads this tab programmatically",
+    "MLB Odds.last_updated":
+        "the odds API reports this per bookmaker, not at the level we capture",
+    "ML RL.Confidence":
+        "label column never written; the Confidence % beside it is populated",
+    "Bet History.juice columns":
+        "10 legacy June values from before DK Juice was wired",
+    "Game Totals.Closing Line":
+        "belongs to fetch_closing_lines.py, superseded by the six daily snapshots",
+    "Game Totals.CLV":
+        "same as Closing Line — superseded",
+    "Bet History.Snapshots":
+        "only populated from 2026-08-10; fills in going forward",
+}
+# Ungraded rows never reach zero — players get scratched and those bets void in
+# reality. Alarm on GROWTH, not on presence. Baselines are the settled counts after
+# the 2026-08-10 backfill; a jump means the grader has started missing again.
+UNGRADED_BASELINE = {"Bet History": 5, "Team Totals": 20,
+                     "Game Totals": 15, "Player Props Shadow": 175}
+
+# Whole tabs nothing in the pipeline reads programmatically. Park Factor Data is a
+# human-maintained reference sheet whose rows are not truly blank, so the sparse
+# -column check keeps firing on it. Not worth tuning a heuristic for a tab no code
+# depends on — better to say so plainly than leave nine warnings nobody will act on.
+ACCEPTED_TABS = {"Park Factor Data"}
+
+def _accepted(area, msg):
+    if area in ACCEPTED:
+        return True
+    if area.split(".")[0] in ACCEPTED_TABS:
+        return True
+    base = UNGRADED_BASELINE.get(area)
+    if base is not None and "still ungraded" in msg:
+        try:
+            return int(msg.split()[0]) <= base
+        except (ValueError, IndexError):
+            return False
+    return False
+
 # ── summary ──────────────────────────────────────────────────────────────
 print("\n" + "=" * 84)
 print("SUMMARY")
 print("=" * 84)
+known = [f for f in findings if _accepted(f[1], f[2])]
+findings = [f for f in findings if not _accepted(f[1], f[2])]
 fails = [f for f in findings if f[0] == "FAIL"]
 warns = [f for f in findings if f[0] == "WARN"]
+if known:
+    print(f"\n  ({len(known)} known/accepted finding(s) suppressed — see ACCEPTED in "
+          f"pipeline_audit.py)")
 print(f"\n  FAIL: {len(fails)}    WARN: {len(warns)}")
 if fails:
     print("\n  Must fix:")
@@ -296,3 +361,63 @@ if warns:
     for _, a, m in warns: print(f"    - {a}: {m}")
 if not fails and not warns:
     print("\n  Clean.")
+
+# ── publish to the workbook ──────────────────────────────────────────────────
+# The findings above go to the GitHub Actions log, which the owner does not read and
+# has said they cannot check. Monitoring nobody sees is not monitoring, so the same
+# report is written to a 'Pipeline Health' tab in the workbook they already open
+# daily. Row 1 is a single status line: if it does not say OK, something needs
+# looking at, and the timestamp tells you whether the check itself is still running.
+#
+# A STALE TIMESTAMP IS ITSELF THE ALARM. This step runs with if:always() in the
+# workflow, so it reports even when an earlier step crashed. If the date in row 1 is
+# not today, the morning routine did not finish — which no other signal would show,
+# because a pipeline that dies just leaves yesterday's numbers sitting there looking
+# perfectly normal.
+HEALTH_TAB = "Pipeline Health"
+try:
+    try:
+        wsh = sh.worksheet(HEALTH_TAB)
+    except Exception:
+        wsh = sh.add_worksheet(title=HEALTH_TAB, rows=200, cols=6)
+
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if fails:
+        status = f"NEEDS ATTENTION — {len(fails)} issue(s)"
+    elif warns:
+        status = f"OK (with {len(warns)} note(s))"
+    else:
+        status = "OK — everything checks out"
+
+    rows = [
+        ["STATUS", status, "", f"last checked {stamp}", "", ""],
+        ["", "", "", "", "", ""],
+        ["Level", "Area", "What is wrong", "", "", ""],
+    ]
+    for lvl, area, msg in fails + warns:
+        rows.append([lvl, ascii_(area), ascii_(msg), "", "", ""])
+    if not fails and not warns:
+        rows.append(["OK", "-", "Nothing new. Everything checked out.", "", "", ""])
+    rows.append(["", "", "", "", "", ""])
+    rows.append(["", "FAIL = provably not doing its job. WARN = worth a look, not urgent.",
+                 "", "", "", ""])
+    rows.append(["", "If 'last checked' is not today, the morning run did not finish.",
+                 "", "", "", ""])
+    if known:
+        rows.append(["", "", "", "", "", ""])
+        rows.append(["KNOWN — already triaged, listed so they are not forgotten",
+                     "", "", "", "", ""])
+        for lvl, area, msg in known:
+            reason = ACCEPTED.get(area, "within expected range")
+            rows.append(["known", ascii_(area), ascii_(msg), ascii_(reason), "", ""])
+
+    wsh.clear()
+    wsh.update(values=rows, range_name="A1", value_input_option="USER_ENTERED")
+    wsh.format("A1:F1", {
+        "textFormat": {"bold": True,
+                       "foregroundColor": ({"red": 0.7} if fails else {"green": 0.45})},
+    })
+    wsh.format("A3:F3", {"textFormat": {"bold": True}})
+    print(f"\n  wrote '{HEALTH_TAB}' tab — status: {status}")
+except Exception as e:
+    print(f"\n  [WARN] could not write '{HEALTH_TAB}' tab: {e}")

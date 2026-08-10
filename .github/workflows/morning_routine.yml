@@ -63,6 +63,12 @@ jobs:
       # two columns rendered correct values as nonsense. Every one was found by a
       # human reading cells. This puts that check in front of someone daily instead
       # of waiting for the next time somebody happens to look.
-      - name: Pipeline audit (report only)
+      # if:always() so it still runs when an earlier step CRASHED — that is precisely
+      # when you want the report, and a pipeline that dies silently just leaves
+      # yesterday's numbers sitting there looking normal. The audit writes a
+      # 'Pipeline Health' tab in the workbook, so a stale timestamp there is itself
+      # the alarm that the morning run never finished.
+      - name: Pipeline audit (writes Pipeline Health tab)
+        if: always()
         continue-on-error: true
         run: python pipeline_audit.py
