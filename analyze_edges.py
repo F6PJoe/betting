@@ -1590,7 +1590,21 @@ def capture_line_history(gc, run_now: str) -> int:
         # bottom is cheaper for a tab this size, but it buried today's capture ~1,500
         # rows down and read as "nothing ran" — verifiability beats the write cost.
         wsl.insert_rows(out, row=2, value_input_option="USER_ENTERED")
-        print(f"  Line History: appended {len(out)} rows "
+        # _norm_ts above fixes COMPARING timestamps, but the stored cells still render
+        # unpadded ("9:04:55"), so sorting the display string puts 9am after 4pm —
+        # 3,004 of 9,306 rows were affected and max() returned the 9am pull as latest.
+        # Deriving closing lines depends on ordering these, so pin a zero-padded
+        # pattern: the value stays a real datetime (sorts right numerically) and the
+        # display now sorts right as text too.
+        try:
+            ts_i = LINE_HISTORY_HEADER.index("Run At")
+            ts_c = chr(65 + ts_i)
+            wsl.format(f"{ts_c}2:{ts_c}{wsl.row_count}",
+                       {"numberFormat": {"type": "DATE_TIME",
+                                         "pattern": "yyyy-mm-dd hh:mm:ss"}})
+        except Exception:
+            pass
+        print(f"  Line History: added {len(out)} rows "
               f"({len({r[2] for r in out})} games x {len({r[5] for r in out})} books)")
         return len(out)
     except Exception as e:
@@ -2040,6 +2054,9 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
 
     # Best line per (player, market, direction) across books
     best_line: dict = {}
+    # Every team-total line seen across every book, before the dedup discards all but
+    # one. CLV needs the price of OUR number, not the best number to bet now.
+    tt_seen_lines: dict = {}
     for row in prop_odds:
         player    = str(row.get("player", "") or row.get("name", "")).strip()
         market    = str(row.get("market_key", "")).strip()
@@ -2074,7 +2091,25 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             best_line[key] = {"line": line, "price": price, "book": book,
                                "home": home, "away": away}
 
+        # Record EVERY line/price seen for team totals, before the dedup above throws
+        # them away. best_line keeps one entry per (player, market, direction) and for
+        # an Under prefers the HIGHEST line — correct for choosing a bet, wrong for
+        # CLV, which has to price the number we actually took. BetRivers routinely
+        # lists 3.5/4.5/5.5 on the same team, so an ATL Under 4.5 was being measured
+        # against the 5.5 while four books still showed 4.5 unchanged all day.
+        # Keeps the best PRICE per (team, direction, line) across books.
+        if market == "team_totals" and line is not None and price is not None:
+            gl  = f"{abbrev(away)} @ {abbrev(home)}"
+            lk  = (gl, "Team Total", direction, abbrev(player), _line_key(line))
+            cur = tt_seen_lines.get(lk)
+            try:
+                if cur is None or float(str(price).replace("+", "")) > float(str(cur).replace("+", "")):
+                    tt_seen_lines[lk] = price
+            except (ValueError, TypeError):
+                pass
+
     tt_all_lines        = {}   # EVERY evaluated TT line, pre-edge-gate, for CLV lookup
+    tt_by_line          = {}   # same, keyed BY LINE so CLV prices OUR number
     tt_rows             = []   # Team Totals — own tab
     tt_rows_for_history = []   # Team Totals — Bet History rows (4+ star only)
     tt_edge_rows        = []   # Team Totals — Edges tab rows
@@ -2278,6 +2313,7 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
             # for the other three bet types; TT was left on the filtered path.
             tt_all_lines[(game_label, "Team Total", direction, abbrev(player))] = (
                 str(line), str(price))
+            tt_by_line[(game_label, "Team Total", direction, abbrev(player), _line_key(line))] = str(price)
             # One floor for both directions. The old code needed a 20% Over floor vs
             # 8% for Unders purely to suppress the mean-vs-median bias; with that bias
             # gone the two sides perform the same (at >=+3 pts: Overs 54.8%, Unders
@@ -2397,7 +2433,9 @@ def analyze_props(prop_odds: list[dict], pitchers: dict, batter_stats: dict,
     sort_key = lambda r: (r[11], r[8])  # units col=11, edge col=8
     tt_rows.sort(key=sort_key, reverse=True)
     prop_rows.sort(key=lambda r: (r[11], float(str(r[9]).replace("%","")) if r[9] else 0), reverse=True)  # units col=11, edge% col=9
-    return tt_rows, tt_edge_rows, tt_rows_for_history, prop_rows, tt_all_lines
+    # tt_seen_lines holds every book's line; tt_by_line only ever saw the deduped one.
+    tt_by_line.update(tt_seen_lines)
+    return tt_rows, tt_edge_rows, tt_rows_for_history, prop_rows, tt_all_lines, tt_by_line
 
 
 # ── Edge analysis ─────────────────────────────────────────────────────────────
@@ -2432,6 +2470,13 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
     # Every ML/RL price seen, recorded before the edge gates so CLV can still be
     # computed for a bet whose edge has faded since the morning. See clv_lines below.
     _clv_seen = {}
+    # Same prices, additionally keyed BY LINE. CLV must compare our number at its
+    # current price — not whatever line is best to BET now. Books offer alternates
+    # (BetRivers routinely lists 3.5/4.5/5.5 on the same team total), and the
+    # best-to-bet rule prefers a higher line for an Under, so ATL Under 4.5 was being
+    # priced against an alternate 5.5 and reported as a one-run adverse move while
+    # four books still showed 4.5 unchanged. See _clv_update_hist.
+    _clv_by_line = {}
 
     def juice_numeric(price):
         """Higher value = better odds for the bettor (works for both +/- lines)."""
@@ -2689,6 +2734,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                 # Record for CLV BEFORE the edge gate — see all_lines_for_clv below.
                 _clv_seen[(game_label, "Moneyline", side, "")] = ("", str(price))
+                _clv_by_line[(game_label, "Moneyline", side, "", "")] = str(price)
 
                 if abs(edge_pct) >= 4.0 and edge_pct > 0:
                     units = unit_scale(edge_pct, ML_SCALE)
@@ -2750,6 +2796,7 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
 
                 # Record for CLV BEFORE the edge gate — see all_lines_for_clv below.
                 _clv_seen[(game_label, "Run Line", side, "")] = (str(spread), str(price))
+                _clv_by_line[(game_label, "Run Line", side, "", _line_key(spread))] = str(price)
 
                 if 12.0 <= edge_pct <= 20.0:
                     units = unit_scale(edge_pct, RL_SCALE)
@@ -2911,12 +2958,13 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
     for (gid, direction), g in best_gt_shadow_per_game_dir.items():
         key = (g["game_label"], "Game Total", direction, "")
         clv_lines[key] = (str(g["t_line"]), str(g["juice"]))
+        _clv_by_line[(g["game_label"], "Game Total", direction, "", _line_key(g["t_line"]))] = str(g["juice"])
     for (gid, btype, side), s in best_shadow_per_signal.items():
         line_val = s.get("spread")
         key = (s["game_label"], btype, side, "")
         clv_lines[key] = ("" if line_val is None else str(line_val), str(s["price"]))
 
-    return edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections, clv_lines
+    return edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections, clv_lines, _clv_by_line
 
 
 def _shadow_row(
@@ -3195,7 +3243,19 @@ def _format_proj_column(ws_hist, written_rows, start_row=2):
         print(f"  [Our Projection formatting skipped: {e}]")
 
 
-def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
+def _line_key(v) -> str:
+    """
+    Canonical string for a betting line, so lookups match regardless of formatting.
+    str(9.0) is "9.0" but the sheet renders the same line as "9", which silently
+    broke same-line CLV matching on every integer total. %g normalises both.
+    """
+    try:
+        return f"{float(str(v).strip()):g}"
+    except (ValueError, TypeError):
+        return str(v).strip()
+
+
+def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None, clv_by_line=None):
     """Afternoon/evening runs: update PM or EV CLV columns in today's Bet History rows.
 
     Positive CLV% = implied prob went UP from morning → market moved toward our bet
@@ -3319,12 +3379,6 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
         all_lines = clv_lines or {}
         if key in all_lines or key in fresh_lookup:
             new_line, new_juice = all_lines[key] if key in all_lines else fresh_lookup[key]
-            bj_idx  = ci["Book Juice"]
-            bj_raw  = raw_row[bj_idx] if len(raw_row) > bj_idx else ""
-            am_juice_int  = _parse_juice(bj_raw)
-            if am_juice_int is None:            # fall back to the display string
-                am_juice_int = _parse_juice(row[bj_idx])
-            new_juice_int = _parse_juice(new_juice)
 
             # A price comparison only means anything at the SAME line. _bet_key matches
             # on game/type/direction/team but NOT the line, so when the market total
@@ -3340,9 +3394,35 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
                     return float(str(s).strip())
                 except (ValueError, TypeError):
                     return None
-            bl_n, nl_n = _lnum(row[ci["Book Line"]]), _lnum(new_line)
+            bl_n = _lnum(row[ci["Book Line"]])
+
+            # Price OUR number first. clv_lines holds the best line to BET now, which
+            # is not the same question: for an Under the best-to-bet rule prefers a
+            # HIGHER line, so with BetRivers listing 3.5/4.5/5.5 on the same team
+            # total, an ATL Under 4.5 got priced against the alternate 5.5 and
+            # recorded as a one-run adverse move — while four books still showed 4.5
+            # unchanged all day. The line had not moved at all.
+            # Only when our exact number is no longer offered anywhere has the market
+            # genuinely moved past us, and only then does Line CLV apply.
+            by_line = clv_by_line or {}
+            same_line_key = key + (_line_key(row[ci["Book Line"]]),)
+            if same_line_key in by_line:
+                new_juice = by_line[same_line_key]
+                new_line  = row[ci["Book Line"]]
+                nl_n      = bl_n
+            else:
+                nl_n = _lnum(new_line)
             line_moved = (bl_n is not None and nl_n is not None
                           and abs(bl_n - nl_n) > 1e-9)
+
+            # Parse AFTER the by-line lookup — new_juice may have just been replaced
+            # with the price at our own number rather than the best-to-bet line.
+            bj_idx  = ci["Book Juice"]
+            bj_raw  = raw_row[bj_idx] if len(raw_row) > bj_idx else ""
+            am_juice_int  = _parse_juice(bj_raw)
+            if am_juice_int is None:            # fall back to the display string
+                am_juice_int = _parse_juice(row[bj_idx])
+            new_juice_int = _parse_juice(new_juice)
 
             # Line CLV — the movement in RUNS, signed so positive always means the
             # number moved our way. Only meaningful for totals: Run Line is fixed at
@@ -3519,7 +3599,7 @@ def main():
 
     print("\nRunning edge analysis ...")
     historical_edges = load_historical_edges(gc)
-    edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections, clv_lines = analyze(
+    edge_rows, history_rows, shadow_rows, gt_shadow_rows, game_projections, clv_lines, clv_by_line = analyze(
         games, book_lines, pitchers, offense, run_now, special_games,
         bullpen_eras=bullpen_eras, ump_map=ump_map,
         sp_profiles=sp_profiles, batting_splits=batting_splits,
@@ -3603,7 +3683,7 @@ def main():
 
     # ── Player Props analysis and snapshot ───────────────────────────────────
     print("\nRunning player props analysis ...")
-    tt_rows, tt_edge_rows, tt_rows_for_history, prop_shadow_rows, tt_all_lines = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
+    tt_rows, tt_edge_rows, tt_rows_for_history, prop_shadow_rows, tt_all_lines, tt_by_line = analyze_props(prop_odds, pitchers, batter_stats, games, run_now,
                                                                                 sp_opp_stats=sp_opp_stats,
                                                                                 game_projections=game_projections,
                                                                                 historical_edges=historical_edges)
@@ -3617,6 +3697,7 @@ def main():
     # edge-filtered and was the only source here until 2026-08-10, which is why live
     # TT bets came back with no CLV once their edge faded.
     clv_lines.update(tt_all_lines)
+    clv_by_line.update(tt_by_line)
 
     # Then let today's actual TT bet rows win where they exist — same line, but the
     # book/price we recorded for the bet rather than whichever book led at eval time.
@@ -3639,7 +3720,8 @@ def main():
         hour = datetime.now(EASTERN).hour
         if already_in_hist and force and hour >= 11:
             # Afternoon/evening run: update PM/EV CLV columns only — preserve morning picks
-            _clv_update_hist(ws_hist, history_rows, today, clv_lines=clv_lines)
+            _clv_update_hist(ws_hist, history_rows, today, clv_lines=clv_lines,
+                             clv_by_line=clv_by_line)
         elif already_in_hist and not force:
             print("Bet History: today already exists — skipping snapshot (first-run protection)")
         else:
