@@ -301,6 +301,7 @@ else:
 # than before, so the burn needs to be visible rather than discovered when writes
 # start failing. The plan resets on the 1st, so pace is measured against day-of-month.
 print("\n" + "-" * 84)
+CREDIT_INFO = {}
 print("9. API CREDIT BURN")
 print("-" * 84)
 try:
@@ -318,6 +319,7 @@ try:
         day  = datetime.now().day
         days_in_month = 31
         pace = used / max(day, 1) * days_in_month
+        CREDIT_INFO.update(used=used, plan=plan, pace=pace, day=day)
         print(f"  used {used:,} of {plan:,} this period ({used/max(plan,1)*100:.1f}%)")
         print(f"  day {day} of the month — on pace for {pace:,.0f}")
         if pace > plan:
@@ -332,7 +334,11 @@ try:
     else:
         print("  (ODDS_API_KEY not set — skipped)")
 except Exception as e:
-    print(f"  [skipped] {e}")
+    # Loud on purpose. This block swallowed a NameError on 2026-08-10 and printed
+    # nothing useful, hiding a broken credit check inside the very tool meant to
+    # surface hidden breakage.
+    print(f"  [FAILED] credit check did not run: {type(e).__name__}: {e}")
+    add("WARN", "API credits", f"credit check could not run: {type(e).__name__}: {e}")
 
 
 # ── known and accepted ───────────────────────────────────────────────────────
@@ -432,6 +438,24 @@ try:
 
     rows = [
         ["STATUS", status, "", f"last checked {stamp}", "", ""],
+    ]
+    # Credit burn shown on the tab, not just in the log. The owner asked to verify
+    # these against the-odds-api.com dashboard rather than trust a model — a good
+    # instinct, since on 2026-08-10 the API header read 1,991 while the dashboard
+    # showed 1,911 and neither of us could say which was right. Prompt lands on
+    # Mondays so the check actually recurs instead of depending on remembering.
+    if CREDIT_INFO:
+        ci_ = CREDIT_INFO
+        rows.append(["CREDITS",
+                     f"{ci_['used']:,} used of {ci_['plan']:,} "
+                     f"({ci_['used']/max(ci_['plan'],1)*100:.0f}%)",
+                     "", f"on pace for {ci_['pace']:,.0f} by month end", "", ""])
+        if datetime.now().weekday() == 0:      # Monday
+            rows.append(["CHECK ME",
+                         "Weekly: log in to the-odds-api.com and compare 'used' "
+                         "against the number above.",
+                         "", "Tell Claude if they disagree.", "", ""])
+    rows += [
         ["", "", "", "", "", ""],
         ["Level", "Area", "What is wrong", "", "", ""],
     ]
