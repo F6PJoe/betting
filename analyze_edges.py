@@ -3265,6 +3265,7 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
 
     matched = 0
     unparsed = 0
+    moved = 0
     updated_rows = []
     for row_num in today_row_nums:
         row = list(all_vals[row_num - 1]) + [""] * max(0, n_cols - len(all_vals[row_num - 1]))
@@ -3285,7 +3286,29 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
             if am_juice_int is None:            # fall back to the display string
                 am_juice_int = _parse_juice(row[bj_idx])
             new_juice_int = _parse_juice(new_juice)
-            if am_juice_int is not None and new_juice_int is not None:
+
+            # A price comparison only means anything at the SAME line. _bet_key matches
+            # on game/type/direction/team but NOT the line, so when the market total
+            # moves we were pricing our bet against a different number and calling the
+            # difference CLV. On 2026-08-09 that produced "+17.42%" for BOS U5.5 — a
+            # 5.5 bet compared to the 6.5 price. 6 of 20 values were affected, all
+            # inflated, and CLV is the metric every other decision now leans on.
+            # When the line moves we still record the new line and juice (the move is
+            # itself the signal) but leave CLV blank rather than book a false number.
+            # Moneyline has no line, so both sides are blank and it compares normally.
+            def _lnum(s):
+                try:
+                    return float(str(s).strip())
+                except (ValueError, TypeError):
+                    return None
+            bl_n, nl_n = _lnum(row[ci["Book Line"]]), _lnum(new_line)
+            line_moved = (bl_n is not None and nl_n is not None
+                          and abs(bl_n - nl_n) > 1e-9)
+
+            if line_moved:
+                clv_str = ""
+                moved += 1
+            elif am_juice_int is not None and new_juice_int is not None:
                 am_impl  = american_to_implied(am_juice_int)
                 new_impl = american_to_implied(new_juice_int)
                 # Write a NUMBER in percentage points (1.17), not a string.
@@ -3325,6 +3348,7 @@ def _clv_update_hist(ws_hist, fresh_rows, today, clv_lines=None):
     filled = sum(1 for r in updated_rows if str(r[ci[col_clv]]).strip())
     print(f"  CLV update ({slot_label} slot): {matched}/{len(updated_rows)} rows matched, "
           f"{filled} CLV values written"
+          + (f", {moved} skipped (line moved)" if moved else "")
           + (f", {unparsed} UNPARSEABLE" if unparsed else ""))
     if matched and not filled:
         print("    *** WARNING: rows matched but no CLV written — check juice parsing ***")
