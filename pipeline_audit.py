@@ -16,7 +16,7 @@ checks the things that fail QUIETLY.
 Every finding is prefixed FAIL / WARN / INFO. FAIL means something is provably not
 doing its job. Read those first.
 """
-import os, sys, math
+import os, sys, math, time
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gspread
@@ -50,13 +50,28 @@ print("=" * 84)
 # 2026-08-10 17:41: 0 of 25 rows populated".
 SKIP_TABS = {"Pipeline Health"}
 
+# Every tab is read TWICE (display + unformatted), and Google allows 60 reads per
+# minute per user. Line History alone is past 9,000 rows and growing by ~1,800/day, so
+# a 429 is a matter of time — and a rate limit reported as "could not read tab" would
+# look exactly like a broken pipeline. Retry with backoff instead of crying wolf.
+def _read_tab(w, tries=4):
+    for attempt in range(tries):
+        try:
+            return w.get_all_values(), w.get_all_values(value_render_option='UNFORMATTED_VALUE')
+        except Exception as e:
+            if "429" not in str(e) and "Quota exceeded" not in str(e):
+                raise
+            if attempt == tries - 1:
+                raise
+            time.sleep(20 * (attempt + 1))   # 20s, 40s, 60s
+    return None, None
+
 TABS = {}
 for w in sh.worksheets():
     if w.title in SKIP_TABS:
         continue
     try:
-        d = w.get_all_values()
-        u = w.get_all_values(value_render_option='UNFORMATTED_VALUE')
+        d, u = _read_tab(w)
         TABS[w.title] = (d, u)
     except Exception as e:
         add("FAIL", w.title, f"could not read tab: {e}")
