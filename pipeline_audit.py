@@ -105,9 +105,17 @@ print("-" * 84)
 # %-rendering column, not by assumption — the first guess had Team Totals.Edge % as
 # points when 607 of its cells store fractions.
 POINTS_COLUMNS = {
-    ("Bet History", "Close CLV%"),        # 1.59 -> "+1.59%"
-    ("Player Props Shadow", "Edge %"),    # 0.4794 -> "0.48%"
+    # Written as a NUMBER (1.59) behind a literal-% pattern, deliberately, so an
+    # UNFORMATTED_VALUE read returns 1.59 points rather than 0.0159.
+    ("Bet History", "Close CLV%"),
 }
+# Player Props Shadow "Edge %" was wrongly listed here on 2026-08-10 and the mistake
+# was costly. analyze_edges writes it as a STRING -- f"{round(edge_pct,2)}%" -- so
+# Sheets parses "40.93%" into 0.4093 with a PERCENT format. That is correct and always
+# was. What triggered the false alarm were cells storing 3.2 and showing "320.00%":
+# real 320% edges on longshot HR props, which are shadow-only and uncapped, not drift.
+# Pinning a literal-% pattern over them then rewrote ~6,700 rows to read "0.41%" when
+# the edge was 41.03%. Values were never touched; only the display was broken.
 # Everything else (Confidence %, Edge %, Our Projection, Team Totals Edge %) uses
 # Sheets' PERCENT type and stores a fraction: 0.946 -> "94.60%".
 
