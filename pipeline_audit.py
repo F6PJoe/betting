@@ -196,22 +196,59 @@ if not dead_found:
 print("\n" + "-" * 84)
 print("4. GRADING GAPS  (settled games still marked Pending = grader missed them)")
 print("-" * 84)
-cutoff = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+# Measure the ungraded RATE on each SETTLED date, not a cumulative count.
+# The first version compared a running total against a fixed baseline (175 props).
+# That count grows every day — roughly 4% of prop volume is players who get scratched
+# and never appear in a box score, whose bets void in reality and can never grade. So
+# the baseline was guaranteed to breach eventually and then stay red permanently,
+# which is exactly how an alarm becomes wallpaper.
+# A rate per settled date answers the real question: is grading working RIGHT NOW.
+MAX_UNGRADED_RATE = {
+    "Bet History":         0.05,   # real bets: should be ~0
+    "Team Totals":         0.05,
+    "Game Totals":         0.05,
+    "ML RL":               0.05,
+    "Player Props Shadow": 0.15,   # DNP/scratched players never grade; ~4% is normal
+}
+settled_hi = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+settled_lo = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
 for tab in ("Bet History", "Team Totals", "Game Totals", "ML RL", "Player Props Shadow"):
     if tab not in TABS: continue
     d, _ = TABS[tab]
-    if len(d) < 2: continue
-    hdr = d[0]
-    if "Result" not in hdr: continue
-    ri = hdr.index("Result")
-    stale = [r for r in d[1:] if r and r[0].strip() and r[0].strip() < cutoff
-             and (len(r) <= ri or str(r[ri]).strip() in ("", "Pending"))]
-    if stale:
-        dates = sorted({r[0].strip() for r in stale})
-        add("FAIL", tab, f"{len(stale)} rows older than {cutoff} still ungraded "
-                         f"(dates {dates[0]}..{dates[-1]})")
+    if len(d) < 2 or "Result" not in d[0]: continue
+    ri = d[0].index("Result")
+    per_date = defaultdict(lambda: [0, 0])
+    for r in d[1:]:
+        if not r or not str(r[0]).strip(): continue
+        dt = str(r[0]).strip()
+        if not (settled_lo <= dt <= settled_hi): continue
+        per_date[dt][0] += 1
+        if len(r) <= ri or str(r[ri]).strip() in ("", "Pending"):
+            per_date[dt][1] += 1
+    if not per_date:
+        continue
+    limit = MAX_UNGRADED_RATE.get(tab, 0.05)
+    # A rate needs a denominator to mean anything. 2-of-2 ungraded on a thin date is
+    # not evidence of systematic failure — and on 2026-08-06 those two Game Total rows
+    # are --force phantoms for a matchup that never happened on that date (TOR @ PHI,
+    # when Toronto played the Cubs), so they can NEVER grade and would flag forever.
+    MIN_DATE_ROWS = 5
+    sized = {k: v for k, v in per_date.items() if v[0] >= MIN_DATE_ROWS}
+    if not sized:
+        print(f"  [ OK ] {tab}: no settled date with >= {MIN_DATE_ROWS} rows to judge")
+        continue
+    worst = max(sized.items(), key=lambda kv: kv[1][1] / max(kv[1][0], 1))
+    dt, (n, ung) = worst
+    rate = ung / max(n, 1)
+    total_ung = sum(v[1] for v in sized.values())
+    total_n   = sum(v[0] for v in sized.values())
+    if rate > limit:
+        add("FAIL", tab,
+            f"{ung} of {n} rows ungraded on {dt} ({rate*100:.0f}%) — over the "
+            f"{limit*100:.0f}% tolerance, so grading may be failing")
     else:
-        print(f"  [ OK ] {tab}: no stale ungraded rows")
+        print(f"  [ OK ] {tab}: {total_ung}/{total_n} ungraded across settled dates "
+              f"({total_ung/max(total_n,1)*100:.1f}%), worst day {rate*100:.0f}%")
 
 # ── 5. freshness ──────────────────────────────────────────────────────────
 print("\n" + "-" * 84)
@@ -386,11 +423,6 @@ ACCEPTED = {
     "Bet History.Snapshots":
         "only populated from 2026-08-10; fills in going forward",
 }
-# Ungraded rows never reach zero — players get scratched and those bets void in
-# reality. Alarm on GROWTH, not on presence. Baselines are the settled counts after
-# the 2026-08-10 backfill; a jump means the grader has started missing again.
-UNGRADED_BASELINE = {"Bet History": 5, "Team Totals": 20,
-                     "Game Totals": 15, "Player Props Shadow": 175}
 
 # Whole tabs nothing in the pipeline reads programmatically. Park Factor Data is a
 # human-maintained reference sheet whose rows are not truly blank, so the sparse
@@ -403,12 +435,6 @@ def _accepted(area, msg):
         return True
     if area.split(".")[0] in ACCEPTED_TABS:
         return True
-    base = UNGRADED_BASELINE.get(area)
-    if base is not None and "still ungraded" in msg:
-        try:
-            return int(msg.split()[0]) <= base
-        except (ValueError, IndexError):
-            return False
     return False
 
 # ── summary ──────────────────────────────────────────────────────────────

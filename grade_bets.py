@@ -1273,6 +1273,77 @@ def _ungraded_dates(gc, before_date, lookback_days):
     return sorted(found.items(), reverse=True)
 
 
+def fetch_postponed(date_str: str) -> set:
+    """
+    Game keys for games POSTPONED on date_str.
+
+    fetch_scores() drops these — they carry status Final/Postponed with null scores —
+    so a bet on a postponed game sat at "Pending" forever and counted as a grading
+    failure it never was. Books void those bets, so the row should say Void.
+    """
+    try:
+        resp = requests.get(MLB_STATS_BASE,
+                            params={"sportId": 1, "date": date_str, "gameType": "R"},
+                            timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return set()
+    out = set()
+    for blk in data.get("dates", []):
+        for g in blk.get("games", []):
+            st = g.get("status", {})
+            detailed = str(st.get("detailedState", ""))
+            if "Postponed" in detailed or "Cancelled" in detailed or "Canceled" in detailed:
+                a = g["teams"]["away"]["team"]["name"]
+                h = g["teams"]["home"]["team"]["name"]
+                out.add(f"{a} @ {h}".lower())
+    return out
+
+
+def void_postponed(gc, date_str: str) -> int:
+    """Mark ungraded rows for postponed/cancelled games as Void. Returns rows marked."""
+    pp = fetch_postponed(date_str)
+    if not pp:
+        return 0
+    marked = 0
+    for tab in ("Bet History", "Team Totals", "Game Totals", "ML RL", "Player Props Shadow"):
+        try:
+            ws = get_ws(gc, tab)
+            vals = sheets_call(ws.get_all_values)
+        except Exception:
+            continue
+        if not vals or "Result" not in vals[0] or "Game" not in vals[0]:
+            continue
+        ri = vals[0].index("Result")
+        gi = vals[0].index("Game")
+        updates = []
+        for i, r in enumerate(vals[1:], start=2):
+            if not r or str(r[0]).strip() != date_str:
+                continue
+            if len(r) > ri and str(r[ri]).strip() not in ("", "Pending"):
+                continue
+            label = str(r[gi]).strip() if len(r) > gi else ""
+            if not label:
+                continue
+            if label.lower() in pp or expand_game_label(label) in pp:
+                col = ri + 1
+                letter = ""
+                n = col
+                while n:
+                    n, rem = divmod(n - 1, 26)
+                    letter = chr(65 + rem) + letter
+                updates.append({"range": f"{letter}{i}", "values": [["Void"]]})
+        if updates:
+            try:
+                sheets_call(ws.batch_update, updates, value_input_option="USER_ENTERED")
+                marked += len(updates)
+                log(f"    {tab}: marked {len(updates)} row(s) Void (postponed)")
+            except Exception as e:
+                log(f"    {tab}: could not mark Void ({e})")
+    return marked
+
+
 def backfill_ungraded(gc, before_date, lookback_days=GRADE_LOOKBACK_DAYS,
                       max_dates=MAX_BACKFILL_DATES):
     """Give previously-missed rows another chance. Graders already skip graded rows."""
@@ -1309,6 +1380,9 @@ def backfill_ungraded(gc, before_date, lookback_days=GRADE_LOOKBACK_DAYS,
                 ps = fetch_player_stats(d)
                 n = grade_props(get_ws(gc, "Player Props Shadow"), sc, ps, d)
                 total += n; log(f"    Player Props: {n}")
+            # Anything still Pending for this date may be a postponed game, which
+            # books void. Mark those rather than leaving them to look like misses.
+            void_postponed(gc, d)
         except Exception as e:
             log(f"    backfill error on {d}: {e}")
     log(f"  backfill graded {total} previously-missed rows")

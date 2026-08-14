@@ -53,8 +53,18 @@ def ws(gc, sheet_id: str, tab: str, header: list[str] | None = None):
 
 
 def sheet_to_dicts(worksheet) -> list[dict]:
-    """Read a worksheet into a list of dicts keyed by its header row."""
-    values = worksheet.get_all_values()
+    """
+    Read a worksheet into a list of dicts keyed by its header row.
+
+    UNFORMATTED_VALUE is deliberate: the default render returns DISPLAY
+    strings, which carry whatever number format the cell happens to have
+    drifted into. In the MLB model a percent-formatted cell rendered -113 as
+    "-11300.00%" and int() threw — silently, on the CLV path. Anything we
+    parse must come back as the underlying value, not its formatting.
+    """
+    values = worksheet.get_all_values(
+        value_render_option=gspread.utils.ValueRenderOption.unformatted
+    )
     if not values:
         return []
     header, rows = values[0], values[1:]
@@ -515,6 +525,34 @@ def build_rest_lookup(current_season: int = 2026) -> dict:
     return lookup
 
 
+def filter_to_scheduled_games(games_by_id: dict, rest_lookup: dict) -> tuple[dict, list]:
+    """
+    Keep only games that appear on the official nflverse schedule.
+
+    PRESEASON GUARD. Sportsbooks post preseason lines, and nothing else in this
+    model would notice: `project_game_score()` would happily rate a preseason
+    game off regular-season team ratings, even though starters play a series or
+    two and the result is close to noise relative to team quality. That would
+    emit real-looking bets on games the model has no business pricing.
+
+    `rest_lookup` is built from `import_schedules()` filtered to REG, so
+    membership in it is exactly "this is a real regular-season game".
+
+    NOTE: when playoff betting is added, widen the schedule filter in
+    build_rest_lookup() to include POST or this will silently drop playoff
+    games too.
+    """
+    keep, dropped = {}, []
+    for game_id, g in games_by_id.items():
+        home = TEAM_NAME_TO_ABBR.get(g.get("home_team"))
+        away = TEAM_NAME_TO_ABBR.get(g.get("away_team"))
+        if home and away and (home, away) in rest_lookup:
+            keep[game_id] = g
+        else:
+            dropped.append(f"{g.get('away_team')} @ {g.get('home_team')}")
+    return keep, dropped
+
+
 def _fmt_time_et(commence_iso: str) -> str:
     try:
         from zoneinfo import ZoneInfo
@@ -524,6 +562,53 @@ def _fmt_time_et(commence_iso: str) -> str:
         return s.lstrip("0")
     except Exception:
         return ""
+
+
+def best_available(quotes_by_line: dict, prefer: str):
+    """
+    Pick the best REAL, BETTABLE line — never an average across books.
+
+    Averaging book lines produces numbers no book offers (a 3.5/3.5/4/4 spread
+    consensus is 3.75; totals came out at 38.8 and 42.1). You cannot place that
+    bet and you cannot grade it honestly, and recording a line nobody posted is
+    the same family of error as MLB's CLV bug #1.
+
+    Line beats juice when they conflict: a half point is worth far more than a
+    few cents, especially near key numbers. So we take the most favourable LINE
+    first, then the best price among the books actually offering it.
+
+    prefer: "low"  -> smaller number is better for us (Over a total)
+            "high" -> larger number is better for us (Under a total; any spread,
+                      since +10.5 beats +10 and -3 beats -3.5 alike)
+
+    quotes_by_line: {line_float: {book: price}}
+    Returns (line, price, book, n_books_at_that_line) or (None, None, None, 0).
+    """
+    if not quotes_by_line:
+        return None, None, None, 0
+    line = (min if prefer == "low" else max)(quotes_by_line)
+    quotes = quotes_by_line[line]
+    book, price = max(quotes.items(), key=lambda kv: kv[1])
+    return line, price, book, len(quotes)
+
+
+def _totals_by_line(books: dict, price_key: str) -> dict:
+    out = {}
+    for book, v in books.items():
+        if v.get("point") is None or v.get(price_key) is None:
+            continue
+        out.setdefault(float(v["point"]), {})[book] = v[price_key]
+    return out
+
+
+def _spreads_by_line(books: dict, side_key: str) -> dict:
+    out = {}
+    for book, v in books.items():
+        pt, pr = v.get(f"{side_key}_point"), v.get(f"{side_key}_price")
+        if pt is None or pr is None:
+            continue
+        out.setdefault(float(pt), {})[book] = pr
+    return out
 
 
 def row_from_header(header: list[str], d: dict) -> list:
@@ -603,25 +688,30 @@ def analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
         points = [v["point"] for v in totals_books.values() if v.get("point") is not None]
         if not points:
             continue
-        consensus_line = round(sum(points) / len(points), 1)
-        edge = our_total - consensus_line
-        direction = "Over" if edge > 0 else "Under"
+        # Consensus decides WHICH SIDE we're on (it's the market's centre), but
+        # the bet is then placed at a real book's real line — see best_available().
+        consensus_line = round(sum(points) / len(points), 2)
+        direction = "Over" if our_total > consensus_line else "Under"
+        price_key = "over_price" if direction == "Over" else "under_price"
+
+        by_line = _totals_by_line(totals_books, price_key)
+        line, best_price, best_book, n_books = best_available(
+            by_line, prefer="low" if direction == "Over" else "high")
+        if line is None:
+            continue
+
+        # Edge is measured against the line we would actually bet, not the
+        # unbettable average.
+        edge = (our_total - line) if direction == "Over" else (line - our_total)
         abs_edge = abs(edge)
         if abs_edge < GAME_TOTAL_SCALE[0][0]:
             continue
         units = unit_scale(abs_edge, GAME_TOTAL_SCALE)
         stars = stars_from_units(units)
-
-        price_key = "over_price" if direction == "Over" else "under_price"
-        best_book, best_price = None, None
-        for book, v in totals_books.items():
-            p = v.get(price_key)
-            if p is not None and (best_price is None or p > best_price):
-                best_book, best_price = book, p
         dk_price = totals_books.get("draftkings", {}).get(price_key)
 
         game_label = f"{g['away_team']} @ {g['home_team']}"
-        edge_pct = round((abs_edge / consensus_line * 100), 1) if consensus_line else 0.0
+        edge_pct = round((abs_edge / line * 100), 1) if line else 0.0
         conf = "High" if stars == 5 else "Medium" if stars == 4 else "Standard"
         conf_pct = round(units * 100, 1)
 
@@ -630,9 +720,11 @@ def analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
             "Away Team": g["away_team"], "Home Team": g["home_team"],
             "Away QB": "", "Home QB": "",
             "Book": best_book or "", "Bet Type": "Game Total", "Direction": direction,
-            "Bet On": f"{direction} {consensus_line}",
+            "Bet On": f"{direction} {line:g}",
             "Stars": stars_emoji(stars), "Units": units, "Units Bet": units, "Units Would Bet": units,
-            "Book Line": consensus_line, "Book Juice": best_price if best_price is not None else "",
+            "Book Line": line, "Consensus Line": consensus_line,
+            "Books At Line": n_books,
+            "Book Juice": best_price if best_price is not None else "",
             "DK Juice": dk_price if dk_price is not None else "",
             "Our Projection": round(our_total, 1), "Edge": round(edge, 2), "Edge %": edge_pct,
             "Edge % of Line": edge_pct,
@@ -643,6 +735,11 @@ def analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
             "Wind MPH": proj["wind_mph"] or "", "Wind Dir": "", "Temp (F)": proj["temp_f"] or "",
             "Weather Adj": proj["weather_adj"], "Roof": NFL_STADIUMS.get(home_abbr, {}).get("roof", ""),
             "Run at": datetime.now().strftime("%H:%M"),
+            # Canonical fields for nfl_bet_tracking (leading underscore = not a
+            # sheet column; row_from_header ignores anything not in the header)
+            "_game_id": game_id, "_stars_n": stars,
+            "_side": direction, "_line": line,
+            "_kickoff_et": _fmt_time_et(g["commence_time"]),
         }
         gt_rows.append(row_from_header(GT_SHADOW_HEADER, d))
         edge_dicts.append(d)
@@ -722,6 +819,9 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
                     "Confidence": "High" if stars == 5 else "Medium" if stars == 4 else "Standard",
                     "Confidence %": round(units * 100, 1),
                     "Run at": datetime.now().strftime("%H:%M"),
+                    "_game_id": game_id, "_stars_n": stars,
+                    "_side": bet_team, "_line": None,
+                    "_kickoff_et": time_et,
                 }
                 rows.append(row_from_header(SHADOW_HEADER, d))
                 edge_dicts.append(d)
@@ -730,21 +830,24 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
         spread_books = g.get("spreads", {})
         home_points = [v["home_point"] for v in spread_books.values() if v.get("home_point") is not None]
         if home_points:
-            consensus_home_point = sum(home_points) / len(home_points)
-            edge_home = proj_margin_home + consensus_home_point  # covers if > 0
-            side = "home" if edge_home > 0 else "away"
-            abs_edge = abs(edge_home)
-            if abs_edge >= SPREAD_SCALE[0][0]:
+            # Consensus picks the SIDE (it's the market's centre); the bet is
+            # then placed at a real book's real line — averaging book spreads
+            # produces numbers nobody offers (10.166, 6.833, 2.833 all appeared
+            # in testing) which can be neither bet nor honestly graded.
+            consensus_home_point = round(sum(home_points) / len(home_points), 2)
+            side = "home" if (proj_margin_home + consensus_home_point) > 0 else "away"
+            # Higher is always better for the side you back: +10.5 beats +10,
+            # and -3 beats -3.5. So "high" works for favourite and dog alike.
+            bet_point, best_price, best_book, n_books = best_available(
+                _spreads_by_line(spread_books, side), prefer="high")
+            own_margin = proj_margin_home if side == "home" else -proj_margin_home
+            abs_edge = abs(own_margin + bet_point) if bet_point is not None else -1.0
+            if bet_point is not None and abs_edge >= SPREAD_SCALE[0][0]:
                 units = unit_scale(abs_edge, SPREAD_SCALE)
                 stars = stars_from_units(units)
-                price_key = f"{side}_price"
-                best_book, best_price = None, None
-                for book, v in spread_books.items():
-                    p = v.get(price_key)
-                    if p is not None and (best_price is None or p > best_price):
-                        best_book, best_price = book, p
                 bet_team = g["home_team"] if side == "home" else g["away_team"]
-                bet_point = consensus_home_point if side == "home" else -consensus_home_point
+                consensus_for_side = (consensus_home_point if side == "home"
+                                      else -consensus_home_point)
                 d = {
                     "Date": today, "Game": game_label, "Time (ET)": time_et,
                     "Away Team": g["away_team"], "Home Team": g["home_team"],
@@ -757,7 +860,9 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
                     "Book": best_book or "", "Book Juice": best_price if best_price is not None else "",
                     "Book Implied%": "", "Consensus Implied%": "",
                     "Edge vs Book%": round(abs_edge, 1), "Edge vs Consensus%": round(abs_edge, 1),
-                    "Spread Line": bet_point, "Stars": stars_emoji(stars), "Units": units, "Units Would Bet": units,
+                    "Spread Line": bet_point, "Consensus Line": consensus_for_side,
+                    "Books At Line": n_books,
+                    "Stars": stars_emoji(stars), "Units": units, "Units Would Bet": units,
                     "Edge Bucket": f"{int(abs_edge)}-{int(abs_edge) + 2}pts",
                     "Market Favorite": g["home_team"] if consensus_home_point < 0 else g["away_team"],
                     "Book Line": bet_point, "Our Projection": round(proj_margin_home if side == "home" else -proj_margin_home, 1),
@@ -767,6 +872,9 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
                     "Confidence": "High" if stars == 5 else "Medium" if stars == 4 else "Standard",
                     "Confidence %": round(units * 100, 1),
                     "Run at": datetime.now().strftime("%H:%M"),
+                    "_game_id": game_id, "_stars_n": stars,
+                    "_side": bet_team, "_line": bet_point,
+                    "_kickoff_et": time_et,
                 }
                 rows.append(row_from_header(SHADOW_HEADER, d))
                 edge_dicts.append(d)
@@ -799,40 +907,145 @@ def analyze_team_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
             pts = [v[f"{side}_point"] for v in tt_books.values() if v.get(f"{side}_point") is not None]
             if not pts:
                 continue
-            consensus_line = round(sum(pts) / len(pts), 1)
-            edge = our_score - consensus_line
-            direction = "Over" if edge > 0 else "Under"
+            # Consensus picks the side; the bet is placed at a real book's line
+            # (same bettable-line fix as game totals — see best_available()).
+            consensus_line = round(sum(pts) / len(pts), 2)
+            direction = "Over" if our_score > consensus_line else "Under"
+            price_key = f"{side}_{'over' if direction == 'Over' else 'under'}_price"
+
+            by_line = {}
+            for book, v in tt_books.items():
+                pt, pr = v.get(f"{side}_point"), v.get(price_key)
+                if pt is None or pr is None:
+                    continue
+                by_line.setdefault(float(pt), {})[book] = pr
+            line, best_price, best_book, n_books = best_available(
+                by_line, prefer="low" if direction == "Over" else "high")
+            if line is None:
+                continue
+
+            edge = (our_score - line) if direction == "Over" else (line - our_score)
             abs_edge = abs(edge)
             if abs_edge < TEAM_TOTAL_SCALE_NFL[0][0]:
                 continue
             units = unit_scale(abs_edge, TEAM_TOTAL_SCALE_NFL)
             stars = stars_from_units(units)
-            price_key = f"{side}_{'over' if direction == 'Over' else 'under'}_price"
-            best_book, best_price = None, None
-            for book, v in tt_books.items():
-                p = v.get(price_key)
-                if p is not None and (best_price is None or p > best_price):
-                    best_book, best_price = book, p
-            edge_pct = round((abs_edge / consensus_line * 100), 1) if consensus_line else 0.0
+            edge_pct = round((abs_edge / line * 100), 1) if line else 0.0
             stars_label = stars_emoji(stars)
             d = {
                 "Date": today, "Game": game_label, "Team": team_name, "Direction": direction,
                 "Best Book": best_book or "", "Book": best_book or "",
-                "Book Line": consensus_line, "Book Juice": best_price if best_price is not None else "",
+                "Book Line": line, "Consensus Line": consensus_line,
+                "Books At Line": n_books,
+                "Book Juice": best_price if best_price is not None else "",
                 "Our Projection": round(our_score, 1), "Edge": round(edge, 2), "Edge %": edge_pct,
                 "Stars": stars_label, "Units": units,
                 "Confidence": "High" if stars == 5 else "Medium" if stars == 4 else "Standard",
                 "Confidence %": round(units * 100, 1),
                 "Time (ET)": _fmt_time_et(g["commence_time"]),
-                "Bet Type": "Team Total", "Bet On": f"{team_name} {direction} {consensus_line}",
+                "Bet Type": "Team Total", "Bet On": f"{team_name} {direction} {line:g}",
                 "Proj Away Score": proj["proj_away"], "Proj Home Score": proj["proj_home"],
                 "Home Win%": "", "Away Win%": "", "Away QB": "", "Home QB": "",
                 "Run at": datetime.now().strftime("%H:%M"),
+                "_game_id": game_id, "_stars_n": stars,
+                "_side": f"{team_name} {direction}", "_line": line,
+                "_kickoff_et": _fmt_time_et(g["commence_time"]),
             }
             rows.append(row_from_header(TEAM_TOTAL_HEADER, d))
             edge_dicts.append(d)
 
     return rows, edge_dicts
+
+
+def to_tracking_candidates(all_edge_dicts: list[dict]) -> list[dict]:
+    """
+    Map this run's qualifying edges into the canonical shape
+    nfl_bet_tracking.upsert_bet_history() expects.
+
+    Every bet type funnels through here, so Bet History is one table with a
+    Bet Type column rather than a tab per type — the old per-type shadow tabs
+    were a MLB-ism that the game+type+side+line key makes redundant.
+    """
+    out = []
+    for d in all_edge_dicts:
+        out.append({
+            "game_id":    d.get("_game_id", ""),
+            "game":       d.get("Game", ""),
+            "kickoff_et": d.get("_kickoff_et", d.get("Time (ET)", "")),
+            "bet_type":   d.get("Bet Type", ""),
+            "side":       d.get("_side", ""),
+            "bet_on":     d.get("Bet On", ""),
+            "line":       d.get("_line"),
+            "consensus_line": d.get("Consensus Line"),
+            "books_at_line":  d.get("Books At Line"),
+            "price":      d.get("Book Juice"),
+            "book":       d.get("Book", ""),
+            "stars":      d.get("_stars_n", 0),
+            "units":      d.get("Units"),
+            "projection": d.get("Our Projection"),
+            "edge":       d.get("Edge"),
+            "edge_pct":   d.get("Edge %"),
+        })
+    return out
+
+
+def build_projection_log_entries(games_by_id, team_stats, rest_lookup,
+                                 weather_by_game, qualified_keys: set) -> list[dict]:
+    """
+    One row per game per bet type per side, EVERY run, whether or not it
+    qualified. This is what makes the star thresholds testable after the fact —
+    without it you only ever see bets that already cleared the bar, so you can
+    never ask "would my 2.8-point edges have won too?"
+    """
+    entries = []
+    for game_id, g in games_by_id.items():
+        home = TEAM_NAME_TO_ABBR.get(g["home_team"])
+        away = TEAM_NAME_TO_ABBR.get(g["away_team"])
+        if not home or not away:
+            continue
+        proj = project_game_score(home, away, team_stats, rest_lookup,
+                                  weather_by_game, game_id)
+        if not proj:
+            continue
+        label = f"{g['away_team']} @ {g['home_team']}"
+        kick = _fmt_time_et(g.get("commence_time", ""))
+        our_total = proj["proj_away"] + proj["proj_home"]
+        margin = proj["proj_home"] - proj["proj_away"]
+
+        def add(bet_type, side, projection, consensus, edge):
+            # Edge % is only meaningful where the line is a magnitude (a total).
+            # For a spread it divides by a signed handicap, so a -3.5 line turns
+            # a 1.55-point edge into "-44.29%" — sign-flipped and meaningless.
+            # Moneylines have no line at all. Left blank for both.
+            if bet_type in ("Game Total", "Team Total") and edge is not None and consensus:
+                pct = round(abs(edge) / abs(consensus) * 100, 2)
+            else:
+                pct = ""
+            key = f"{game_id}|{bet_type}|{side}"
+            entries.append({
+                "game_id": game_id, "game": label, "kickoff_et": kick,
+                "bet_type": bet_type, "side": side,
+                "projection": round(projection, 2) if projection is not None else "",
+                "consensus_line": consensus,
+                "edge": round(edge, 2) if edge is not None else "",
+                "edge_pct": pct,
+                "qualified": key in qualified_keys,
+            })
+
+        pts = [v["point"] for v in g.get("totals", {}).values() if v.get("point") is not None]
+        if pts:
+            line = round(sum(pts) / len(pts), 1)
+            add("Game Total", "Over", our_total, line, our_total - line)
+
+        hp = [v["home_point"] for v in g.get("spreads", {}).values()
+              if v.get("home_point") is not None]
+        if hp:
+            line = round(sum(hp) / len(hp), 2)
+            add("Spread", g["home_team"], margin, line, margin + line)
+
+        add("Moneyline", g["home_team"],
+            round(normal_cdf(margin, sd=MARGIN_STD_DEV) * 100, 1), "", None)
+    return entries
 
 
 def build_edges(all_edge_dicts: list[dict]) -> list:
@@ -851,7 +1064,8 @@ def build_edges(all_edge_dicts: list[dict]) -> list:
 # now as the agreed schema; Step 3 fills the values, not the columns.
 EDGES_HEADER = [
     "Game", "Time (ET)", "Book", "Bet Type", "Direction", "Bet On",
-    "Stars", "Units", "Book Line", "Book Juice", "Our Projection",
+    "Stars", "Units", "Book Line", "Consensus Line", "Books At Line",
+    "Book Juice", "Our Projection",
     "Edge", "Edge %", "Away QB", "Home QB",
     "Proj Away Score", "Proj Home Score", "Home Win%", "Away Win%",
     "Confidence", "Confidence %", "Run at",
@@ -960,6 +1174,8 @@ def snapshot_first_run(gc, tab, header, rows, sort_key=None):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    import nfl_bet_tracking as tracking  # deferred: it imports this module back
+
     print("=" * 60)
     print("nfl_analyze_edges.py — Fantasy Six Pack NFL Edge Analysis")
     print(f"Run time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -990,6 +1206,15 @@ def main():
     games_by_id = group_odds_by_game(odds_rows)
     print(f"  {len(games_by_id)} unique games in NFL Odds tab")
 
+    # Preseason guard — see filter_to_scheduled_games(). Books post preseason
+    # lines and nothing downstream would notice they aren't real games.
+    games_by_id, dropped = filter_to_scheduled_games(games_by_id, rest_lookup)
+    if dropped:
+        print(f"  Dropped {len(dropped)} game(s) not on the regular-season schedule "
+              f"(preseason/other): {', '.join(dropped[:4])}"
+              + (" ..." if len(dropped) > 4 else ""))
+    print(f"  {len(games_by_id)} regular-season game(s) to analyse")
+
     print("Checking weather for outdoor games within 7 days ...")
     weather_by_game = load_weather(games_by_id)
     print(f"  {len(weather_by_game)} game(s) with a weather pull")
@@ -1006,11 +1231,27 @@ def main():
     print(f"  {len(ml_spread_rows)} ML/Spread shadow rows")
     print(f"  {len(tt_rows)} team total rows")
 
+    # ── Edges tab: the LIVE view, cleared and rewritten every run ────────────
     write_edges_tab(gc, edge_rows)
-    snapshot_first_run(gc, "Bet History", HISTORY_HEADER, history_rows)
-    snapshot_first_run(gc, "Game Totals", GT_SHADOW_HEADER, gt_shadow_rows)
-    snapshot_first_run(gc, "ML Spread", SHADOW_HEADER, ml_spread_rows)
-    snapshot_first_run(gc, "Team Totals", TEAM_TOTAL_HEADER, tt_rows)
+
+    # ── Bet History: permanent, keyed game+type+side+line, upserted ──────────
+    all_edges = gt_edges + ml_edges + tt_edges
+    candidates = to_tracking_candidates(all_edges)
+    stats = tracking.upsert_bet_history(gc, candidates)
+    print(f"Bet History: {stats['added']} new bet(s), {stats['updated']} updated, "
+          f"{stats['total']} tracked total")
+
+    # ── Line Log: every distinct line on the market, all games, every run ────
+    n_lines = tracking.append_line_log(gc, games_by_id)
+    print(f"Line Log: appended {n_lines} line quote(s)")
+
+    # ── Projection Log: every game, qualifying or not ────────────────────────
+    qualified_keys = {f"{d.get('_game_id')}|{d.get('Bet Type')}|{d.get('_side')}"
+                      for d in all_edges}
+    entries = build_projection_log_entries(games_by_id, team_stats, rest_lookup,
+                                           weather_by_game, qualified_keys)
+    n_proj = tracking.append_projection_log(gc, entries)
+    print(f"Projection Log: appended {n_proj} projection(s)")
 
     print("\nDone.")
 

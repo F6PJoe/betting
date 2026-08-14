@@ -15,6 +15,9 @@ Imported by nfl_analyze_edges.py; not meant to be run standalone.
 """
 
 import os
+import re
+import unicodedata
+
 import pandas as pd
 import nfl_data_py as nfl_data
 
@@ -24,6 +27,110 @@ PBP_URL_TMPL = "https://github.com/nflverse/nflverse-data/releases/download/pbp/
 # overwrites this same filename, so the script never has to guess which
 # week's file is current.
 WR_CB_PDF_PATH = os.path.join(os.path.dirname(__file__), "nfl_wr_cb_matchup_current.pdf")
+
+
+# ── Player name normalization ─────────────────────────────────────────────────
+# HARD REQUIREMENT, not a nicety. The organic projections sheet and the ESPN
+# WR-CB PDF carry NO player IDs, so those joins are name-only with no ID
+# fallback. Real collisions confirmed in the user's own uploaded DFS files:
+#   "Travis Etienne"  (4for4)  vs "Travis Etienne Jr." (Share Data)
+#   "Demario Douglas" (4for4)  vs "DeMario Douglas"    (Projections)
+# A bare .strip().lower() catches the second and silently misses the first.
+# The MLB model hit this exact failure on "José Ramírez"/"Jose Ramirez" and
+# silently skipped a large share of props — see project_nfl_model.md memory.
+_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def normalize_name(name: str) -> str:
+    """
+    Canonical key for cross-source player joins.
+
+    NFKD-decompose and drop combining marks (José -> Jose), lowercase, strip
+    punctuation (D.K. -> dk, Smith-Njigba -> smithnjigba), and drop generational
+    suffixes (Travis Etienne Jr. -> travisetienne).
+
+    Deliberately removes ALL whitespace too, so "St. Brown"/"StBrown" collapse
+    together. This makes the key exact-match-only by design — never substring
+    match on it, since "mccaffrey" would hit both Christian and Luke.
+    """
+    if not name:
+        return ""
+    s = unicodedata.normalize("NFKD", str(name))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9\s]", "", s)          # drop punctuation, keep spaces for suffix split
+    parts = [p for p in s.split() if p not in _SUFFIXES]
+    return "".join(parts)
+
+
+# Nickname/legal-name variants that normalization CANNOT resolve, because the
+# strings genuinely differ rather than just being punctuated differently.
+# Hand-maintained; add to it whenever a weekly run reports an unmatched player
+# who is clearly active. Keys and values are both normalized forms.
+NAME_ALIASES = {
+    "mitchtrubisky":    "mitchelltrubisky",
+    "kennygainwell":    "kennethgainwell",
+    "hollywoodbrown":   "marquisebrown",
+    "joshuadobbs":      "joshdobbs",
+    "camakers":         "cameronakers",
+    "chigozieokonkwo":  "chigoziemokonkwo",
+    "gabedavis":        "gabrieldavis",
+    "tankbigsby":       "takeviousbigsby",
+}
+
+
+def build_name_to_id(seasons: tuple = (2026, 2025),
+                     positions: tuple = ("QB", "RB", "WR", "TE")) -> dict:
+    """
+    {normalized_name: gsis player_id} for skill-position players.
+
+    Unions multiple seasons, EARLIEST-LISTED WINS, so pass the current season
+    first. Rationale: nflverse's seasonal roster for the upcoming year is only
+    partially populated during the offseason — checked 2026-08-12 and it was
+    missing clearly-active veterans (Diggs, Tyreek Hill, Chubb, Hopkins) while
+    the organic sheet already projected them. Unioning the prior season fills
+    those gaps; taking the current season first keeps the newer record when
+    both exist. Player IDs are stable across seasons, so this is safe.
+
+    Restricted to the four prop-relevant position groups on purpose: it shrinks
+    the collision surface (no OL/DL sharing a normalized name with a WR) and
+    those are the only players we ever project.
+
+    Genuinely ambiguous names (two different active skill players normalizing
+    identically) are DROPPED rather than resolved arbitrarily — a wrong join is
+    worse than a missing one, since a missing one surfaces as an unprojected
+    player while a wrong one silently projects the wrong human. Dropped names
+    come back under the "_ambiguous" key so callers can surface them.
+    """
+    by_key = {}
+    for season in seasons:
+        try:
+            roster = nfl_data.import_seasonal_rosters([season])
+        except Exception as e:
+            print(f"  [warn] roster {season} unavailable: {e}")
+            continue
+        roster = roster[roster["position"].isin(positions)]
+        for pid, name in zip(roster["player_id"], roster["player_name"]):
+            if not pid or not name:
+                continue
+            by_key.setdefault(normalize_name(name), set()).add(pid)
+
+    resolved = {k: next(iter(v)) for k, v in by_key.items() if len(v) == 1}
+    ambiguous = {k: sorted(v) for k, v in by_key.items() if len(v) > 1}
+
+    # Point each known variant at the canonical player's id
+    for variant, canonical in NAME_ALIASES.items():
+        if canonical in resolved and variant not in resolved:
+            resolved[variant] = resolved[canonical]
+
+    resolved["_ambiguous"] = ambiguous
+    return resolved
+
+
+def resolve_player_id(name: str, name_map: dict) -> str | None:
+    """Look up a gsis player_id from any source's spelling of a name."""
+    key = normalize_name(name)
+    return name_map.get(key) or name_map.get(NAME_ALIASES.get(key, ""))
 
 
 def _load_pbp(season: int) -> pd.DataFrame:

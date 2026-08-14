@@ -8,6 +8,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone, timedelta
 import os
+import sys
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -42,17 +43,90 @@ PLAYER_PROP_MARKETS = (
 )
 FETCH_PLAYER_PROPS  = False  # flip to True only after explicit user confirmation
 
-# NFL odds boards are posted months in advance (unlike MLB, which only ever
-# returns a day or two of games). Per-event calls (team_totals, and props
-# later) cost credits per game, so we only make them for games within this
-# window — books haven't posted team-total markets for games further out
-# anyway, and lines move a lot in the final week regardless.
-EVENT_ODDS_WINDOW_DAYS = 7
+# ── Week scoping ─────────────────────────────────────────────────────────────
+# The Odds API returns the ENTIRE regular season in one call — measured
+# 2026-08-12: 272 events, Week 1 through Week 18, for a flat 3 credits.
+# Without scoping, the model would track bets on January games in August, where
+# the line still has five months of movement left in it. Useless as a bet and
+# noise in the calibration set.
+#
+# We therefore scope to ONE WEEK, defaulting to the next week that hasn't
+# kicked off yet. Weeks come from the official nflverse schedule rather than
+# date arithmetic, because NFL "weeks" straddle Thu->Mon and a Monday-night
+# kickoff lands on Tuesday in UTC — date maths gets that wrong at the boundary.
+#
+# Per-event calls (team_totals now, props later) are scoped to the same set, so
+# cost is predictable: 3 flat + 1/game team totals = ~19 credits per pass, or
+# ~115 with props. Override with --week N.
+DEFAULT_WEEK_MODE = "upcoming"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+# Odds API full team names -> nflverse abbreviations. Kept here rather than
+# imported so this script stays runnable on its own.
+TEAM_NAME_TO_ABBR = {
+    "Arizona Cardinals": "ARI", "Atlanta Falcons": "ATL", "Baltimore Ravens": "BAL",
+    "Buffalo Bills": "BUF", "Carolina Panthers": "CAR", "Chicago Bears": "CHI",
+    "Cincinnati Bengals": "CIN", "Cleveland Browns": "CLE", "Dallas Cowboys": "DAL",
+    "Denver Broncos": "DEN", "Detroit Lions": "DET", "Green Bay Packers": "GB",
+    "Houston Texans": "HOU", "Indianapolis Colts": "IND", "Jacksonville Jaguars": "JAX",
+    "Kansas City Chiefs": "KC", "Las Vegas Raiders": "LV", "Los Angeles Chargers": "LAC",
+    "Los Angeles Rams": "LA", "Miami Dolphins": "MIA", "Minnesota Vikings": "MIN",
+    "New England Patriots": "NE", "New Orleans Saints": "NO", "New York Giants": "NYG",
+    "New York Jets": "NYJ", "Philadelphia Eagles": "PHI", "Pittsburgh Steelers": "PIT",
+    "San Francisco 49ers": "SF", "Seattle Seahawks": "SEA", "Tampa Bay Buccaneers": "TB",
+    "Tennessee Titans": "TEN", "Washington Commanders": "WAS",
+}
+
+
+def build_week_lookup(season: int = 2026) -> dict:
+    """{(home_abbr, away_abbr): week} from the official schedule."""
+    import nfl_data_py as nfl_data
+    sched = nfl_data.import_schedules([season])
+    sched = sched[sched["game_type"] == "REG"]
+    return {(r["home_team"], r["away_team"]): int(r["week"])
+            for _, r in sched.iterrows()}
+
+
+def resolve_target_week(games: list[dict], week_lookup: dict, requested=None) -> int | None:
+    """
+    Which week to fetch. An explicit --week wins; otherwise the lowest week
+    that still has a game yet to kick off.
+    """
+    if requested is not None:
+        return requested
+    now = datetime.now(timezone.utc)
+    upcoming = []
+    for g in games:
+        wk = week_lookup.get((TEAM_NAME_TO_ABBR.get(g.get("home_team")),
+                              TEAM_NAME_TO_ABBR.get(g.get("away_team"))))
+        if wk is None:
+            continue
+        try:
+            kick = datetime.fromisoformat(g["commence_time"].replace("Z", "+00:00"))
+        except (ValueError, TypeError, KeyError):
+            continue
+        if kick > now:
+            upcoming.append(wk)
+    return min(upcoming) if upcoming else None
+
+
+def games_in_week(games: list[dict], week_lookup: dict, week: int) -> list[dict]:
+    """Games belonging to the target week, per the official schedule.
+
+    Doubles as the preseason/non-regular-season guard: anything absent from the
+    schedule has no week and is dropped.
+    """
+    out = []
+    for g in games:
+        key = (TEAM_NAME_TO_ABBR.get(g.get("home_team")),
+               TEAM_NAME_TO_ABBR.get(g.get("away_team")))
+        if week_lookup.get(key) == week:
+            out.append(g)
+    return out
 
 # ── Google Sheets setup ───────────────────────────────────────────────────────
 NFL_ODDS_HEADER = [
@@ -162,76 +236,85 @@ def main():
     print(f"Run time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    all_rows   = []
-    last_hdrs  = {}
-    all_games  = []  # keep raw game list to extract event IDs for team totals / props
+    # --week N to pin a week; --lines-only to skip per-event calls entirely
+    # (the cheap game-day snapshot used purely to capture a closing line).
+    requested_week = None
+    for i, a in enumerate(sys.argv):
+        if a == "--week" and i + 1 < len(sys.argv):
+            requested_week = int(sys.argv[i + 1])
+    lines_only = "--lines-only" in sys.argv
 
-    # NFL free-tier core markets. (No alternate_totals call — MLB pulls those too,
-    # but NFL doesn't need alt total lines for our bet types and skipping saves credits.)
+    last_hdrs = {}
+
+    # One flat 3-credit call returns the whole season; we scope afterwards.
     print("\nFetching markets=h2h,spreads,totals ...")
     games, hdrs = fetch_market("h2h,spreads,totals")
-    if games:
-        all_rows = parse_games(games)
-        last_hdrs = hdrs
-        all_games = games
-        print(f"  {len(games)} games -> {len(all_rows)} rows parsed")
-    else:
-        print("  0 games returned (normal in the off-season / bye weeks)")
+    if not games:
+        print("  0 games returned (normal in the off-season)")
+        return
+    last_hdrs = hdrs
+    print(f"  {len(games)} games on the board (full season)")
 
-    # ── Fetch per-event odds (team totals always; player props only when enabled) ─
-    # Bounded to the next EVENT_ODDS_WINDOW_DAYS — see comment at top of file.
-    now_utc     = datetime.now(timezone.utc)
-    window_end  = now_utc + timedelta(days=EVENT_ODDS_WINDOW_DAYS)
-    prop_rows   = []
-    skipped     = 0
-    out_of_window = 0
+    print("Loading official schedule for week mapping ...")
+    week_lookup = build_week_lookup()
+    target_week = resolve_target_week(games, week_lookup, requested_week)
+    if target_week is None:
+        print("  No upcoming scheduled games found — nothing to do.")
+        return
+
+    week_games = games_in_week(games, week_lookup, target_week)
+    print(f"  Target: WEEK {target_week} — {len(week_games)} game(s)"
+          + (f" (--week {requested_week} requested)" if requested_week else " (next un-played week)"))
+    if not week_games:
+        print("  No games matched that week.")
+        return
+
+    all_rows = parse_games(week_games)
+    print(f"  {len(all_rows)} line rows parsed for week {target_week}")
+
+    # ── Per-event odds, scoped to the same week ──────────────────────────────
+    now_utc   = datetime.now(timezone.utc)
+    prop_rows = []
+    skipped   = 0
 
     markets_to_fetch = TEAM_TOTAL_MARKETS
     if FETCH_PLAYER_PROPS:
         markets_to_fetch += "," + PLAYER_PROP_MARKETS
 
-    games_in_window = []
-    for game in all_games:
-        commence_raw = game.get("commence_time", "")
-        try:
-            commence_dt = datetime.fromisoformat(commence_raw.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            commence_dt = None
-        if commence_dt and commence_dt <= now_utc:
-            skipped += 1
-            continue
-        if commence_dt and commence_dt > window_end:
-            out_of_window += 1
-            continue
-        games_in_window.append(game)
+    if lines_only:
+        print("\n--lines-only: skipping per-event calls (closing-line snapshot mode)")
+    else:
+        to_fetch = []
+        for game in week_games:
+            try:
+                kick = datetime.fromisoformat(game["commence_time"].replace("Z", "+00:00"))
+            except (ValueError, TypeError, KeyError):
+                kick = None
+            if kick and kick <= now_utc:
+                skipped += 1   # already started; last snapshot stands as its close
+                continue
+            to_fetch.append(game)
 
-    if games_in_window:
-        print(f"\nFetching per-event odds ({markets_to_fetch}) "
-              f"for {len(games_in_window)} game(s) within {EVENT_ODDS_WINDOW_DAYS} days ...")
-    if out_of_window:
-        print(f"  Skipped {out_of_window} game(s) more than {EVENT_ODDS_WINDOW_DAYS} days out "
-              f"(saves credits — team-total/prop markets aren't posted that early anyway)")
+        print(f"\nFetching per-event odds ({markets_to_fetch}) for {len(to_fetch)} game(s) "
+              f"~{len(to_fetch) * (1 + (6 if FETCH_PLAYER_PROPS else 0))} credits ...")
+        for game in to_fetch:
+            event_data, hdrs = fetch_event_props(game.get("id", ""), markets_to_fetch)
+            if event_data:
+                rows = parse_prop_rows(event_data)
+                prop_rows.extend(rows)
+                last_hdrs = hdrs
+                print(f"  {game.get('away_team')} @ {game.get('home_team')}: {len(rows)} rows")
+        if skipped:
+            print(f"  Skipped {skipped} game(s) already in progress")
 
-    for game in games_in_window:
-        event_id = game.get("id", "")
-        event_data, hdrs = fetch_event_props(event_id, markets_to_fetch)
-        if event_data:
-            rows = parse_prop_rows(event_data)
-            prop_rows.extend(rows)
-            last_hdrs = hdrs
-            home = game.get("home_team", "")
-            away = game.get("away_team", "")
-            print(f"  {away} @ {home}: {len(rows)} rows")
-
-    if skipped:
-        print(f"  Skipped {skipped} game(s) already in progress")
-
-    # ── Write everything to a single NFL Odds tab ─────────────────────────────
+    # ── Write to the NFL Odds tab (working table for one week, not an archive —
+    # the Line Log in nfl_bet_tracking.py is what preserves history) ──────────
     print("\nConnecting to Google Sheets ...")
     ws_odds = get_sheet(NFL_SHEET_ID, "NFL Odds", header=NFL_ODDS_HEADER)
     ws_odds.clear()
     ws_odds.update([NFL_ODDS_HEADER] + all_rows + prop_rows, value_input_option="USER_ENTERED")
-    print(f"  Wrote {len(all_rows)} game rows + {len(prop_rows)} prop rows to 'NFL Odds' tab")
+    print(f"  Wrote {len(all_rows)} game rows + {len(prop_rows)} prop rows "
+          f"for WEEK {target_week} to 'NFL Odds' tab")
 
     # ── API credit report ─────────────────────────────────────────────────────
     used      = last_hdrs.get("x-requests-used", "?")
