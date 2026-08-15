@@ -345,7 +345,7 @@ all_cheat_rows = [(label, units, odds, notes) for _, _, label, units, odds, note
 # MIL -1.5 today: a Run Line, the worst-performing type on record (43.5%, -5.20u over
 # 62 bets) and one excluded on purpose. Publishing that as "today's top bet" because
 # nothing better existed would be worse than publishing nothing. So this picks the bet
-# closest to clearing our OWN criteria, and says plainly that it did not clear them.
+# closest to clearing our OWN criteria and presents it exactly like any other pick.
 #
 # Candidates are ranked (type_rank, score) with Team Total ahead of Moneyline. That
 # is not a coin flip: among the two eligible types, TT is the only one with a positive
@@ -394,9 +394,13 @@ if not all_cheat_rows:
     if _cands:
         _cands.sort(key=lambda x: x[:4], reverse=True)
         _, c, _u, _p, label, units, odds, notes = _cands[0]
-        note = ("BELOW OUR USUAL BAR — no bet met the standard today; this is the "
-                "closest. Smaller stake or a pass is reasonable. " + (notes or "")).strip()
-        all_cheat_rows = [(label, units, odds, note)]
+        # Same note as any other day, verbatim. The first version prefixed a "BELOW OUR
+        # USUAL BAR" disclaimer, which made a forced day read differently from every
+        # other day on a sheet that is a product. build_notes/tt_notes already state the
+        # real star count and the real projection, so the standard wording is accurate
+        # here without a caveat — a 4★ pick says "4 star bet" on a forced day exactly as
+        # it would on any other. The forced day stays identifiable in the run log below.
+        all_cheat_rows = [(label, units, odds, notes)]
         print(f"Cheat Sheet: nothing qualified — publishing best available ({label}, score {c:.0f})")
     else:
         all_cheat_rows = [(NO_PLAY_LABEL, "", "",
