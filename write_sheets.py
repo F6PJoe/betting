@@ -23,8 +23,7 @@ ODDS_SHEET_ID       = "1RaSm1ogJtNykM7WbYfQ3b9L7MUePcRBqlFMKuQfA_I4"
 CHEATSHEET_SHEET_ID = "1goyJ0AM7XqalRWk6IiemHRkvgdayo7E27so86T-y0kM"
 BESTBETS_SHEET_ID   = "1_PQ19dvvD51uYCZcNw6EzV37RkXdDTZpemE9xbDwgTw"
 
-today     = datetime.now().strftime("%Y-%m-%d")
-yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+today = datetime.now().strftime("%Y-%m-%d")
 
 # Full name → abbreviation for cheat sheet / tracker labels
 _FULL_TO_ABBREV = {
@@ -220,21 +219,30 @@ def tt_sort_key(row):
     except: u = 0.0
     return u
 
-_all_today_tt = [r for r in tt_data
-                 if tv(r, tc_date) == today
-                 and str(tv(r, tc_stars)).count("⭐") >= 5]
+def _tt_stars(row):
+    return str(tv(row, tc_stars)).count("⭐")
+
 # Deduplicate to best-juice book per (team, direction) — same logic as Edges tab
 def _tt_juice_val(row):
     try: return _parse_odds_str(tv(row, tc_juice))
     except: return -999
-_best_tt: dict = {}
-for _r in _all_today_tt:
-    _key = (tv(_r, tc_game), tv(_r, tc_dir))  # same key as Edges tab: best per game+direction
-    _j = _tt_juice_val(_r)
-    if _key not in _best_tt or _j > _best_tt[_key][0]:
-        _best_tt[_key] = (_j, _r)
-today_tt = [v[1] for v in _best_tt.values()]
-today_tt.sort(key=tt_sort_key, reverse=True)
+
+def _dedupe_tt(rows):
+    best: dict = {}
+    for _r in rows:
+        _key = (tv(_r, tc_game), tv(_r, tc_dir))  # same key as Edges tab: best per game+direction
+        _j = _tt_juice_val(_r)
+        if _key not in best or _j > best[_key][0]:
+            best[_key] = (_j, _r)
+    out = [v[1] for v in best.values()]
+    out.sort(key=tt_sort_key, reverse=True)
+    return out
+
+today_tt = _dedupe_tt([r for r in tt_data
+                       if tv(r, tc_date) == today and _tt_stars(r) >= 5])
+# 4★ pool feeds the empty-cheatsheet fallback only — never the published list.
+today_tt_4star = _dedupe_tt([r for r in tt_data
+                             if tv(r, tc_date) == today and _tt_stars(r) == 4])
 
 def tt_label(row):
     team  = tv(row, tc_team)
@@ -322,6 +330,86 @@ for row in today_tt:
 combined.sort(key=lambda x: (x[0], x[1]), reverse=True)
 all_cheat_rows = [(label, units, odds, notes) for _, _, label, units, odds, notes in combined]
 
+# ── Fallback: never publish an empty cheat sheet ─────────────────────────────
+# Some days nothing clears the bar — 2026-08-15 had 14 bets and not one qualified
+# (ten Team Totals all at 4 stars, three Run Lines and a Game Total excluded by
+# design), so the sheet published blank.
+#
+# Note the candidate pool CANNOT change during the day: Bet History and Team Totals
+# both have first-run protection, so whatever exists at the morning run is all there
+# will ever be. A qualifying bet cannot "appear later", so no lock or overwrite
+# mechanism is needed — if nothing qualifies at 7am, nothing will at 8pm.
+#
+# The fallback deliberately draws only from the types that are ELIGIBLE in the first
+# place (Team Total, Moneyline). Ranking the whole board by stars would have promoted
+# MIL -1.5 today: a Run Line, the worst-performing type on record (43.5%, -5.20u over
+# 62 bets) and one excluded on purpose. Publishing that as "today's top bet" because
+# nothing better existed would be worse than publishing nothing. So this picks the bet
+# closest to clearing our OWN criteria, and says plainly that it did not clear them.
+#
+# Candidates are ranked (type_rank, score) with Team Total ahead of Moneyline. That
+# is not a coin flip: among the two eligible types, TT is the only one with a positive
+# record (5★ 52.0%, +2.40u) while ML is the worst on the board (39.0%, -11.20u over
+# 82 bets). On a day this thin, a near-miss TT is the better thing to surface than a
+# near-miss ML, regardless of which one scores higher on its own scale.
+NO_PLAY_LABEL = "No bet meets our criteria today"
+
+#
+# Ranking is (type_rank, score, units, price) so nothing is left to dict ordering.
+# It matters: on 2026-08-15 all ten TTs were 4★, so score alone tied every one of
+# them and the "closest bet" would have been whichever the dedup dict happened to
+# emit first. Units is the model's own stake sizing — its confidence, already
+# expressed — and price breaks a remaining tie because at equal model confidence the
+# cheaper number is simply worth more. Raw American odds compare correctly as plain
+# numbers (+114 > +104 > -110 > -145), so no conversion is needed.
+def _price_val(s):
+    try: return _parse_odds_str(s)
+    except: return -10000
+
+if not all_cheat_rows:
+    _cands = []
+    for row in today_bets:
+        bt = hv(row, hc_btype)
+        if bt not in ("Moneyline",):          # same types the gate above allows
+            continue
+        juice_str = hv(row, hc_juice) or hv(row, hc_dkjuice)
+        if not _juice_ok(juice_str):
+            continue
+        try: c = float(str(hv(row, hc_conf)).replace("%", ""))
+        except: c = 0.0
+        try: u = float(hv(row, hc_units))
+        except: u = 0.0
+        _cands.append((0, c, u, _price_val(juice_str),
+                       bet_label(row), hv(row, hc_units),
+                       fmt_odds(hv(row, hc_juice), hv(row, hc_dkjuice)), build_notes(row)))
+    # 5★ TTs first (a TT can only be missing from the list above on juice), then 4★.
+    for row in today_tt + today_tt_4star:
+        if not _juice_ok(tv(row, tc_juice)):
+            continue
+        try: u = float(tv(row, tc_units))
+        except: u = 0.0
+        _cands.append((1, tt_conf(row), u, _price_val(tv(row, tc_juice)),
+                       tt_label(row), tv(row, tc_units),
+                       tt_odds(row), tt_notes(row)))
+    if _cands:
+        _cands.sort(key=lambda x: x[:4], reverse=True)
+        _, c, _u, _p, label, units, odds, notes = _cands[0]
+        note = ("BELOW OUR USUAL BAR — no bet met the standard today; this is the "
+                "closest. Smaller stake or a pass is reasonable. " + (notes or "")).strip()
+        all_cheat_rows = [(label, units, odds, note)]
+        print(f"Cheat Sheet: nothing qualified — publishing best available ({label}, score {c:.0f})")
+    else:
+        all_cheat_rows = [(NO_PLAY_LABEL, "", "",
+                           "Every bet on the board fell below the standard. "
+                           "Sitting out is the play.")]
+        print("Cheat Sheet: nothing qualified and no eligible candidate — publishing a no-play note")
+
+# A genuine no-play is a NOTICE, not a pick. It belongs on the cheat sheet and Best
+# Bets so the reader sees it, but it must never reach the Tracker — an untracked
+# placeholder there would sit unresolved forever and corrupt the record. A below-bar
+# real bet DOES get tracked: we published it, so it counts against us if it loses.
+no_play = len(all_cheat_rows) == 1 and all_cheat_rows[0][0] == NO_PLAY_LABEL
+
 # Best bet = first official bet (already sorted by units/confidence)
 best_bet = all_cheat_rows[0] if all_cheat_rows else None
 
@@ -376,52 +464,74 @@ if m_repair:
     sheets_call(ws3.batch_update, m_repair, value_input_option="USER_ENTERED")
     print(f"Tracker: repaired M formula for {len(m_repair)} historical rows.")
 
-# Finalize yesterday's rows: find Pending entries (col N has stake, col I is blank)
-# Match by searching col E (bet label) against graded Bet History rows
-yest_results = {}
+# Finalize pending rows: col N has a stake and col I is blank.
+# Keyed by (date, label) over a lookback window rather than yesterday alone. A row
+# used to get exactly one chance to grade — if it was missed on the single day the
+# script looked at it, it stayed Pending forever with no alarm. Row 758 (TOR ML,
+# 8/13, a 0.6u loss) sat stranded that way. The window matches GRADE_LOOKBACK_DAYS
+# in grade_bets.py, so anything that grader backfills, this picks up.
+FINALIZE_LOOKBACK_DAYS = 10
+_cutoff = (datetime.now() - timedelta(days=FINALIZE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+
+results_by_key = {}
 for row in hist_data:
-    if hv(row, hc_date) != yesterday:
+    d = hv(row, hc_date)
+    if not (_cutoff <= d < today):
         continue
     result = hv(row, hc_result)
     if result not in ("Win", "Loss", "Push"):
         continue
-    label = bet_label(row)
     try: units_r = float(hv(row, hc_units_r))
     except: units_r = 0.0
     try: stake = abs(float(hv(row, hc_units)))
     except: stake = 0.0
-    yest_results[label] = (result[0], stake, units_r)  # W/L/P, stake, units result
+    results_by_key[(d, bet_label(row))] = (result[0], stake, units_r)  # W/L/P, stake, units result
 
-# Also include team totals from yesterday
-ws_tt_yest = odds_sh.worksheet("Team Totals")
-tt_all = ws_tt_yest.get_all_values()
-tt_hdr2 = tt_all[0] if tt_all else []
-for trow in tt_all[1:]:
-    def tv2(c): return trow[c] if c >= 0 and c < len(trow) else ""
-    date_c   = col(tt_hdr2, "Date")
-    result_c = col(tt_hdr2, "Result")
-    units_c  = col(tt_hdr2, "Units")
-    unitsr_c = col(tt_hdr2, "Units Result")
-    if tv2(date_c) != yesterday:
+# Also include team totals (same tab already read into tt_hdr/tt_data above)
+ttc_result = col(tt_hdr, "Result")
+ttc_unitsr = col(tt_hdr, "Units Result")
+for trow in tt_data:
+    d = tv(trow, tc_date)
+    if not (_cutoff <= d < today):
         continue
-    result = tv2(result_c)
+    result = tv(trow, ttc_result)
     if result not in ("Win", "Loss", "Push"):
         continue
-    label = tt_label(trow)
-    try: stake = abs(float(tv2(units_c)))
+    try: stake = abs(float(tv(trow, tc_units)))
     except: stake = 0.0
-    try: units_r = float(tv2(unitsr_c))
+    try: units_r = float(tv(trow, ttc_unitsr))
     except: units_r = 0.0
-    yest_results[label] = (result[0], stake, units_r)
+    results_by_key[(d, tt_label(trow))] = (result[0], stake, units_r)
+
+def norm_tracker_date(s):
+    """Normalize a tracker col-A date cell to 'YYYY-MM-DD', or None if unparseable.
+
+    Matching used to be a set-membership test against three exact strings. That
+    stranded row 758: its cell displayed as '8/13' (no year), so it matched nothing,
+    the finalize pass skipped it forever, and a real 0.6u loss on TOR ML never made it
+    into the public record. get_all_values() returns DISPLAY text, so a cell Sheets
+    treats as a date renders in whatever format it carries — the exact string is not
+    something this script controls. Parse instead of string-match, and assume the
+    current year when one is absent.
+    """
+    s = str(s).strip()
+    if not s:
+        return None
+    # A year-less cell gets the current year appended before parsing rather than
+    # being parsed bare and patched: strptime on "%m/%d" alone is deprecated and
+    # changes behaviour in Python 3.15.
+    candidates = [(s, "%Y-%m-%d"), (s, "%m/%d/%Y"), (s, "%m/%d/%y")]
+    if s.count("/") == 1:
+        candidates.append((f"{s}/{datetime.now().year}", "%m/%d/%Y"))
+    for text, fmt in candidates:
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
 
 finalize_updates = []
 unmatched = []
-_yest = datetime.now() - timedelta(days=1)
-yesterday_display_variants = {
-    _yest.strftime("%#m/%#d/%Y"),   # 7/9/2026
-    _yest.strftime("%Y-%m-%d"),     # 2026-07-09
-    _yest.strftime("%m/%d/%Y"),     # 07/09/2026
-}
 for i, row in enumerate(rows[1:], start=2):
     if not row or not row[0]:
         continue
@@ -429,22 +539,23 @@ for i, row in enumerate(rows[1:], start=2):
     bet_col_e = row[4] if len(row) > 4 else ""
     pending_n = row[13] if len(row) > 13 else ""
     result_i  = row[8] if len(row) > 8 else ""
-    # Only finalize YESTERDAY's rows that have a pending stake and no result yet
-    if date_a not in yesterday_display_variants:
+    date_key  = norm_tracker_date(date_a)
+    # Any past row inside the window that still has a pending stake and no result
+    if not date_key or not (_cutoff <= date_key < today):
         continue
     if pending_n and pending_n not in ("", "0") and result_i == "":
-        if bet_col_e in yest_results:
-            wlp, stake, _ = yest_results[bet_col_e]
+        if (date_key, bet_col_e) in results_by_key:
+            wlp, stake, _ = results_by_key[(date_key, bet_col_e)]
             finalize_updates.append({"range": f"G{i}", "values": [[stake]]})
             finalize_updates.append({"range": f"I{i}", "values": [[wlp]]})
             finalize_updates.append({"range": f"N{i}", "values": [[""]]})
             finalize_updates.append({"range": f"M{i}", "values": [[f'=if(I{i}="W",H{i}*J{i},J{i}*-1)']]})
         else:
-            unmatched.append(f"  Row {i} ({date_a}): '{bet_col_e}' — no match")
+            unmatched.append(f"  Row {i} ({date_a} → {date_key}): '{bet_col_e}' — no match")
 
 if finalize_updates:
     sheets_call(ws3.batch_update, finalize_updates, value_input_option="USER_ENTERED")
-    print(f"Tracker: finalized {len(finalize_updates)//3} yesterday rows.")
+    print(f"Tracker: finalized {len(finalize_updates)//4} pending rows.")
 else:
     print("Tracker: no pending rows to finalize.")
 if unmatched:
@@ -453,37 +564,39 @@ if unmatched:
         print(m)
 
 # Enter today's bets — first-run protection + auto-expand sheet if needed
+# On a no-play day there is nothing to track. Set the target to an empty list rather
+# than returning early: if an earlier run of the day already wrote a placeholder row,
+# the repair path below sees expected=0 and removes it.
+tracker_rows = [] if no_play else all_cheat_rows
 tracker_data = ws3.get_all_values()
 
 today_display = datetime.now().strftime("%#m/%#d/%Y")  # Windows: %#m/%#d/%Y strips leading zeros
 
-# Check if today's date is already in the tracker (col A)
-# Accept both "7/10/2026" (text) and "2026-07-10" (ISO) to handle format variations
-today_iso = datetime.now().strftime("%Y-%m-%d")
-today_padded = datetime.now().strftime("%m/%d/%Y")  # "07/10/2026" with leading zeros
-today_variants = {today_display, today_iso, today_padded}
+# Check if today's date is already in the tracker (col A). Uses the same tolerant
+# parser as the finalize pass so a reformatted cell can't hide an existing row and
+# cause today's bets to be appended a second time.
 today_already = any(
-    row and row[0].strip() in today_variants
+    row and norm_tracker_date(row[0]) == today
     for row in tracker_data[1:]
 )
 
 if today_already:
     print(f"Tracker: '{today_display}' already in tracker — skipping entry, checking labels/results.")
-    correct_labels = [label for label, _, _, _ in all_cheat_rows]
+    correct_labels = [label for label, _, _, _ in tracker_rows]
     repair_updates = []
     rows_to_delete = []
 
     today_rows_in_tracker = [
         (i + 2, row)
         for i, row in enumerate(tracker_data[1:])
-        if row and row[0].strip() in today_variants
+        if row and norm_tracker_date(row[0]) == today
     ]
     print(f"  Found {len(today_rows_in_tracker)} today rows to repair.")
 
     # Keep only the first N rows (correct count), mark extras for deletion
     expected = len(correct_labels)
-    correct_odds = [odds for _, _, odds, _ in all_cheat_rows]
-    correct_units = [units for _, units, _, _ in all_cheat_rows]
+    correct_odds = [odds for _, _, odds, _ in tracker_rows]
+    correct_units = [units for _, units, _, _ in tracker_rows]
 
     for idx, (sheet_row, trow) in enumerate(today_rows_in_tracker):
         if idx >= expected:
@@ -524,7 +637,7 @@ if today_already:
         formula_updates = []
         for i in range(found, expected):
             r = insert_after + 1 + (i - found)
-            label, units, odds, _ = all_cheat_rows[i]
+            label, units, odds, _ = tracker_rows[i]
             new_updates += [
                 {"range": f"A{r}", "values": [[today_display]]},
                 {"range": f"E{r}", "values": [[label]]},
@@ -546,7 +659,7 @@ else:
     next_row = last_row + 1
 
     # Expand sheet if needed
-    needed = next_row + len(all_cheat_rows)
+    needed = next_row + len(tracker_rows)
     sheet_meta = ws3.spreadsheet.fetch_sheet_metadata()
     for s in sheet_meta["sheets"]:
         if s["properties"]["title"] == "Tracker - Dave":
@@ -558,7 +671,7 @@ else:
 
     today_updates = []
     formula_updates = []
-    for i, (label, units, odds, notes) in enumerate(all_cheat_rows):
+    for i, (label, units, odds, notes) in enumerate(tracker_rows):
         r = next_row + i
         today_updates += [
             {"range": f"A{r}", "values": [[today_display]]},
@@ -572,4 +685,4 @@ else:
         sheets_call(ws3.batch_update, today_updates, value_input_option="RAW")
     if formula_updates:
         sheets_call(ws3.batch_update, formula_updates, value_input_option="USER_ENTERED")
-    print(f"Tracker: {len(all_cheat_rows)} new rows entered starting at row {next_row}.")
+    print(f"Tracker: {len(tracker_rows)} new rows entered starting at row {next_row}.")
