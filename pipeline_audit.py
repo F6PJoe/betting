@@ -228,10 +228,13 @@ for tab in ("Bet History", "Team Totals", "Game Totals", "ML RL", "Player Props 
     if not per_date:
         continue
     limit = MAX_UNGRADED_RATE.get(tab, 0.05)
-    # A rate needs a denominator to mean anything. 2-of-2 ungraded on a thin date is
-    # not evidence of systematic failure — and on 2026-08-06 those two Game Total rows
-    # are --force phantoms for a matchup that never happened on that date (TOR @ PHI,
-    # when Toronto played the Cubs), so they can NEVER grade and would flag forever.
+    # A rate needs a denominator to mean anything: 2-of-2 ungraded on a thin date is
+    # not evidence of systematic failure.
+    #
+    # The 2026-08-06 Game Total rows that motivated this threshold were described here
+    # as phantoms for a matchup that never happened. That was wrong. TOR @ PHI was a
+    # real game played on 08-07 and the row was dated a day early — see section 10,
+    # which exists because this misreading held for nine days. Those rows are now Void.
     MIN_DATE_ROWS = 5
     sized = {k: v for k, v in per_date.items() if v[0] >= MIN_DATE_ROWS}
     if not sized:
@@ -399,6 +402,125 @@ except Exception as e:
     # surface hidden breakage.
     print(f"  [FAILED] credit check did not run: {type(e).__name__}: {e}")
     add("WARN", "API credits", f"credit check could not run: {type(e).__name__}: {e}")
+
+
+# ── 10. date integrity ───────────────────────────────────────────────────────
+# Does the game on each row actually exist on the date the row claims?
+#
+# Added 2026-08-15 after 12 rows across Game Totals and ML RL turned out to be dated
+# one day before the game was played. Nothing caught it for nine days. The only
+# symptom was a single ungraded row on 2026-08-05 that section 4 flagged, and the
+# first three explanations for that row were all wrong — including "phantom games
+# that never existed", which is what the section 4 comment said before this ran.
+#
+# Root cause was a 9:37pm run pulling the next day's slate and stamping it with
+# today's date; the commenceTimeTo cutoff added 2026-08-10 prevents that specific
+# path. This check is the general detector, because the failure mode is silent by
+# construction: a mis-dated row looks completely normal in isolation. Every field is
+# plausible. It only reveals itself when compared against an outside source.
+#
+# The MLB Stats API is free and unrelated to the Odds API quota, so this costs one
+# HTTP call per date in the window and zero credits.
+print("\n" + "-" * 84)
+print("10. DATE INTEGRITY  (was each row's game really played on that date?)")
+print("-" * 84)
+DATE_INTEGRITY_DAYS = 21
+try:
+    import requests as _rq
+
+    def _abbrev_pair(game_str):
+        """'Toronto Blue Jays @ Chicago Cubs' or 'TOR @ CHC' -> 'TOR @ CHC'."""
+        parts = str(game_str).split(" @ ")
+        if len(parts) != 2:
+            return None
+        # MLB_ABBREV maps full names (incl. "Athletics" -> "OAK"); already-abbreviated
+        # names pass through. Getting the Athletics alias wrong turns every one of
+        # their games into a false positive — that mistake produced 44 phantom hits
+        # against a true count of 12 the first time this comparison was run by hand.
+        return " @ ".join(AE.MLB_ABBREV.get(p.strip(), p.strip()) for p in parts)
+
+    _sched_cache = {}
+    def _schedule(day):
+        if day not in _sched_cache:
+            try:
+                r = _rq.get("https://statsapi.mlb.com/api/v1/schedule",
+                            params={"sportId": 1, "date": day}, timeout=20)
+                r.raise_for_status()
+                s = set()
+                for dd in r.json().get("dates", []):
+                    for g in dd.get("games", []):
+                        a = AE.MLB_ABBREV.get(g["teams"]["away"]["team"]["name"], "")
+                        h = AE.MLB_ABBREV.get(g["teams"]["home"]["team"]["name"], "")
+                        if a and h:
+                            s.add(f"{a} @ {h}")
+                # An empty schedule means the API answered but had nothing, which on a
+                # real MLB date means the call is untrustworthy — treat as unknown
+                # rather than declaring every row that day mis-dated.
+                _sched_cache[day] = s or None
+            except Exception:
+                _sched_cache[day] = None
+        return _sched_cache[day]
+
+    _lo = (datetime.now() - timedelta(days=DATE_INTEGRITY_DAYS)).strftime("%Y-%m-%d")
+    total_bad, unknown_dates = 0, set()
+    for tab in ("Bet History", "Team Totals", "Game Totals", "ML RL"):
+        if tab not in TABS:
+            continue
+        d, _ = TABS[tab]
+        if len(d) < 2 or "Date" not in d[0] or "Game" not in d[0]:
+            continue
+        H = {h: i for i, h in enumerate(d[0])}
+        di, gi = H["Date"], H["Game"]
+        # Void rows have already been triaged by a human; re-flagging them daily is
+        # exactly how an alarm turns into wallpaper.
+        vi = H.get("Result", H.get("Bet Result", -1))
+        bad = []
+        for i, r in enumerate(d[1:], start=2):
+            if len(r) <= max(di, gi):
+                continue
+            dt = str(r[di]).strip()
+            if not (_lo <= dt <= TODAY):
+                continue
+            if vi >= 0 and len(r) > vi and str(r[vi]).strip() == "Void":
+                continue
+            game = _abbrev_pair(r[gi])
+            if not game:
+                continue
+            sched = _schedule(dt)
+            if sched is None:
+                unknown_dates.add(dt)
+                continue
+            if game in sched:
+                continue
+            # Which way it is off is the whole diagnostic: +1 means the run picked up
+            # tomorrow's slate, and that points straight at the commence-time filter.
+            off = None
+            for k in (1, -1, 2, -2):
+                other = (datetime.strptime(dt, "%Y-%m-%d") + timedelta(days=k)).strftime("%Y-%m-%d")
+                s2 = _schedule(other)
+                if s2 and game in s2:
+                    off = k
+                    break
+            bad.append((i, dt, game, off))
+        if bad:
+            total_bad += len(bad)
+            shifted = [b for b in bad if b[3] is not None]
+            detail = "; ".join(f"row {i} {dt} {g}"
+                               f"{f' (played {o:+d}d)' if o is not None else ' (no nearby date)'}"
+                               for i, dt, g, o in bad[:3])
+            more = f" +{len(bad)-3} more" if len(bad) > 3 else ""
+            add("FAIL", f"{tab}.dates",
+                f"{len(bad)} row(s) dated to a day the game was not played "
+                f"({len(shifted)} shifted to a nearby date) — {detail}{more}")
+        else:
+            print(f"  [ OK ] {tab}: every row's game matches its date")
+    if unknown_dates:
+        print(f"  (schedule unavailable for {len(unknown_dates)} date(s) — not judged)")
+    if total_bad == 0 and not unknown_dates:
+        print(f"  checked the last {DATE_INTEGRITY_DAYS} days against the MLB schedule")
+except Exception as e:
+    print(f"  [FAILED] date integrity check did not run: {type(e).__name__}: {e}")
+    add("WARN", "date integrity", f"check could not run: {type(e).__name__}: {e}")
 
 
 # ── known and accepted ───────────────────────────────────────────────────────
