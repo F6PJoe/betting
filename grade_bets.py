@@ -635,6 +635,13 @@ TT_RESCALE_DATE      = "2026-08-07"  # Team Total edge rebuilt: shrunk projectio
                                      # from (proj-line)/line % to probability points, so star tiers before
                                      # this date mean something different and can't be pooled with rows
                                      # after it. Must match TT_EDGE_SCALE_DATE in analyze_edges.py.
+ML_RECALIB_DATE      = "2026-08-16"  # Moneyline bias correction: ML_BIAS_CORRECTION removes the
+                                     # measured +6.8pt overconfidence from the edge. Same situation as
+                                     # TT_RESCALE_DATE — the edge that produces a star tier is computed
+                                     # differently from this date, so a 4-star before and a 4-star after
+                                     # are not the same bet and pooling them reports a track record the
+                                     # current model never earned. Expect very low ML volume after this;
+                                     # roughly 4 in 5 previously-qualifying bets no longer clear the gate.
 PROPS_MODEL_START    = "2026-07-22"  # TB convolution model, SP K / H+R+RBI edge caps all live this date
 PROPS_MODEL_START_BY_TYPE = {
     "Total Bases": "2026-07-22",   # Convolution model replaces Poisson; Under shadow-only
@@ -736,6 +743,7 @@ def rebuild_performance(gc):
     rl_b = {3: [], 4: [], 5: []}
     ml_b_fix = {3: [], 4: [], 5: []}
     rl_b_fix = {3: [], 4: [], 5: []}
+    rl_b_combo = {3: [], 4: [], 5: []}   # RL on ML's cutoff, for the combined column only
 
     for row in sh_data:
         while len(row) < len(sh_hdr): row.append("")
@@ -757,12 +765,18 @@ def rebuild_performance(gc):
         is_fix = date >= MODEL_FIX_DATE
         if bet_type == "Moneyline":
             ml_b[stars].append((stars, u, result))
-            if is_fix:
+            # ML gets its own cutoff for the same reason TT does — see ML_RECALIB_DATE.
+            if date >= ML_RECALIB_DATE:
                 ml_b_fix[stars].append((stars, u, result))
         elif bet_type == "Run Line":
             rl_b[stars].append((stars, u, result))
             if is_fix:
                 rl_b_fix[stars].append((stars, u, result))
+            # RL is unchanged by the ML recalibration, but the COMBINED column would
+            # otherwise average RL from 7/22 against ML from 8/16 and call the result one
+            # number. Keep a second RL bucket on ML's cutoff so combined means one window.
+            if date >= ML_RECALIB_DATE:
+                rl_b_combo[stars].append((stars, u, result))
 
     def summary(bets):
         """Return [Bets, W, L, Push, Win%, Units P/L] for a list of (stars, units, result)."""
@@ -785,8 +799,8 @@ def rebuild_performance(gc):
     gt_official_fix = gt_buckets_fix[4] + gt_buckets_fix[5]
     ml_all_fix      = ml_b_fix[3] + ml_b_fix[4] + ml_b_fix[5]
     rl_all_fix      = rl_b_fix[3] + rl_b_fix[4] + rl_b_fix[5]
-    combo_b_fix     = {s: ml_b_fix[s] + rl_b_fix[s] for s in (3, 4, 5)}
-    combo_all_fix   = ml_all_fix + rl_all_fix
+    combo_b_fix     = {s: ml_b_fix[s] + rl_b_combo[s] for s in (3, 4, 5)}
+    combo_all_fix   = ml_all_fix + rl_b_combo[3] + rl_b_combo[4] + rl_b_combo[5]
 
     # ── Team Totals (from Bet History — authoritative; daily_tt already built above) ───
     tt_b     = {3: [], 4: [], 5: []}
@@ -910,7 +924,12 @@ def rebuild_performance(gc):
     # except TT, which restarts at its own rebuild date. Say so in the column header —
     # a number under a "2026-07-22+" banner that actually starts 8/07 is the kind of
     # quiet mislabel that gets read as a track record twice its real size.
-    SECTION_LABELS_FIX = [f"TEAM TOTALS ({TT_RESCALE_DATE}+)" if lbl == "TEAM TOTALS" else lbl
+    _FIX_CUTOFFS = {
+        "TEAM TOTALS":      TT_RESCALE_DATE,
+        "MONEYLINE SHADOW": ML_RECALIB_DATE,
+        "ML+RL COMBINED":   ML_RECALIB_DATE,   # RL re-bucketed onto ML's date, see rl_b_combo
+    }
+    SECTION_LABELS_FIX = [f"{lbl} ({_FIX_CUTOFFS[lbl]}+)" if lbl in _FIX_CUTOFFS else lbl
                           for lbl in SECTION_LABELS]
     sec_hdr_fix = build_sec_hdr(SECTION_LABELS_FIX)
 
@@ -926,7 +945,9 @@ def rebuild_performance(gc):
         full_row("All",     gt_official,    ml_all,   rl_all,   combo_all,   tt_all,
                  prop_all["SP Strikeouts"], prop_all["Total Bases"], prop_all["H+R+RBI"]),
         [""],
-        [f"SINCE RECALIBRATION ({MODEL_FIX_DATE}+, Team Totals {TT_RESCALE_DATE}+)"],
+        # Three columns now restart later than the base date, so the banner stops trying
+        # to name them and the per-column headers carry their own dates instead.
+        [f"SINCE RECALIBRATION ({MODEL_FIX_DATE}+ unless the column header says otherwise)"],
         sec_hdr_fix,
         col_hdr,
         full_row("3-Star",  [],                 ml_b_fix[3],  rl_b_fix[3],  combo_b_fix[3],  tt_b_fix[3],

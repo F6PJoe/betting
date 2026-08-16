@@ -71,6 +71,30 @@ TT_MIN_EDGE_PTS     = 3.0    # minimum edge in probability POINTS (not % differe
                              # 7/22-8/3 collapse window flips from -2.90u to +5.50u.
 TT_MAX_EDGE_PTS     = 25.0   # sanity cap — max observed across 550 bets was +19.6.
                              # Anything past this means bad line/price data, not an edge.
+
+# ── Moneyline calibration ────────────────────────────────────────────────────
+# ML_SHRINK_K pulls our win probability toward 50%. That anchor was always wrong: a
+# coin flip is not an unbiased estimate of a baseball game. The market is — measured
+# across 453 graded shadow bets, the book's implied probability ran +0.1 points against
+# actual outcomes, essentially perfect, while the number feeding our edge gate ran
+# +6.8 points hot (95% CI +2.2 to +11.4). We were not finding value; we were rating our
+# side ~7 points too high and calling the difference an edge. Average claimed edge over
+# the same bets: +6.7 points. The edge WAS the bias.
+#
+# ML_BIAS_CORRECTION removes that measured LEVEL error and nothing else.
+#
+# It deliberately does not touch the slope. Regressing (actual - book) on (ours - book)
+# gives k=0.55 with a 95% CI of -0.45 to 1.56 — at this sample size "the edge is entirely
+# fictional" (k=0) and "the edge is fully real" (k=1) are both inside the interval. Any
+# specific k would be fitting noise. The level is measurable and gets corrected; the
+# slope is not, so it is left alone. Re-check k once ML has ~1,500 graded bets.
+#
+# Expected effect, simulated on the 453 graded bets: qualifying bets fall from 76% of
+# the board to 17%. That is the point. This stops the losses; it is NOT evidence that
+# what survives is profitable, and it should not be read that way — the surviving
+# sample's out-of-sample result was p=0.376, i.e. nothing demonstrated either way.
+ML_SHRINK_K        = 0.6
+ML_BIAS_CORRECTION = 0.068   # 6.8 probability points, measured 2026-08-16 on n=453
 TT_EDGE_SCALE_DATE  = "2026-08-07"  # date the TT edge unit changed from (proj-line)/line %
                              # to probability points. Rows before this are on the old scale
                              # and must NOT feed the confidence percentile — an old 30% edge
@@ -2727,9 +2751,13 @@ def analyze(games, book_lines, pitchers, offense, run_now: str, special_games: d
                 if price is None:
                     continue
                 implied = american_to_implied(price)
-                # Shrink ML win probability toward 50% (k=0.6) — calibration shows model
-                # is overconfident outside 58-63% range; shrinkage improves ROI significantly
-                ml_pct = 0.5 + 0.6 * (our_pct - 0.5)
+                # Shrink toward 50%, then remove the measured +6.8pt overconfidence.
+                # See ML_BIAS_CORRECTION at the top of this file for the evidence and for
+                # why only the level is corrected and not the slope.
+                # NOTE: "Our Win%" written to the ML RL tab below is our_pct — the value
+                # BEFORE this line. It is not the number that drives the bet. Measuring
+                # calibration off that column overstates the bias (+9.8 vs the true +6.8).
+                ml_pct = 0.5 + ML_SHRINK_K * (our_pct - 0.5) - ML_BIAS_CORRECTION
                 edge_pct = (ml_pct - implied) * 100
 
                 # Record for CLV BEFORE the edge gate — see all_lines_for_clv below.
