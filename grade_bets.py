@@ -809,7 +809,13 @@ def rebuild_performance(gc):
         if stars not in (3, 4, 5):
             continue
         tt_b[stars].append((stars, u, result))
-        if date >= MODEL_FIX_DATE:
+        # TT uses its OWN cutoff, not the shared MODEL_FIX_DATE. The 2026-08-07 rebuild
+        # changed the edge UNIT — from (proj-line)/line percent to probability points —
+        # so a 4-star before that date and a 4-star after it are not the same bet, which
+        # is exactly what TT_RESCALE_DATE says a few lines up. Filtering on 7/22 pooled
+        # them anyway and reported 298 bets at 49.7%, when the model actually running
+        # today had 95. A retired definition's record was padding the current one's.
+        if date >= TT_RESCALE_DATE:
             tt_b_fix[stars].append((stars, u, result))
 
     tt_all     = tt_b[3] + tt_b[4] + tt_b[5]
@@ -900,6 +906,14 @@ def rebuild_performance(gc):
     sec_hdr = build_sec_hdr(SECTION_LABELS)
     col_hdr = build_col_hdr(len(SECTION_LABELS))
 
+    # The lower block is no longer uniform: every column restarts at MODEL_FIX_DATE
+    # except TT, which restarts at its own rebuild date. Say so in the column header —
+    # a number under a "2026-07-22+" banner that actually starts 8/07 is the kind of
+    # quiet mislabel that gets read as a track record twice its real size.
+    SECTION_LABELS_FIX = [f"TEAM TOTALS ({TT_RESCALE_DATE}+)" if lbl == "TEAM TOTALS" else lbl
+                          for lbl in SECTION_LABELS]
+    sec_hdr_fix = build_sec_hdr(SECTION_LABELS_FIX)
+
     perf_rows = [
         sec_hdr,
         col_hdr,
@@ -912,8 +926,8 @@ def rebuild_performance(gc):
         full_row("All",     gt_official,    ml_all,   rl_all,   combo_all,   tt_all,
                  prop_all["SP Strikeouts"], prop_all["Total Bases"], prop_all["H+R+RBI"]),
         [""],
-        [f"SINCE RECALIBRATION ({MODEL_FIX_DATE}+)"],
-        sec_hdr,
+        [f"SINCE RECALIBRATION ({MODEL_FIX_DATE}+, Team Totals {TT_RESCALE_DATE}+)"],
+        sec_hdr_fix,
         col_hdr,
         full_row("3-Star",  [],                 ml_b_fix[3],  rl_b_fix[3],  combo_b_fix[3],  tt_b_fix[3],
                  prop_b_fix["SP Strikeouts"][3], prop_b_fix["Total Bases"][3], prop_b_fix["H+R+RBI"][3]),
