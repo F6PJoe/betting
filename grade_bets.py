@@ -635,6 +635,14 @@ TT_RESCALE_DATE      = "2026-08-07"  # Team Total edge rebuilt: shrunk projectio
                                      # from (proj-line)/line % to probability points, so star tiers before
                                      # this date mean something different and can't be pooled with rows
                                      # after it. Must match TT_EDGE_SCALE_DATE in analyze_edges.py.
+PERF_STAR_TIERS      = (4, 5)        # Star tiers the Performance tab reports on.
+                                     # 3-star was dropped 2026-08-19. Those bets are shadow-only:
+                                     # Bet History and the cheat sheet both gate at 4-star, so a
+                                     # 3-star row is a hypothetical we never staked. Mixing them into
+                                     # the totals reported a record for bets nobody could have placed
+                                     # — 210 of the 411 "Moneyline" bets were 3-star. It also made the
+                                     # All row incomparable across columns, since Game Totals already
+                                     # excluded 3-star while every other column did not.
 ML_RECALIB_DATE      = "2026-08-16"  # Moneyline bias correction: ML_BIAS_CORRECTION removes the
                                      # measured +6.8pt overconfidence from the edge. Same situation as
                                      # TT_RESCALE_DATE — the edge that produces a star tier is computed
@@ -760,7 +768,7 @@ def rebuild_performance(gc):
             continue
         bet_type = row[sc_type].strip() if sc_type >= 0 else ""
         date     = row[sc_date].strip() if sc_date >= 0 else ""
-        if stars not in (3, 4, 5):
+        if stars not in PERF_STAR_TIERS:
             continue
         is_fix = date >= MODEL_FIX_DATE
         if bet_type == "Moneyline":
@@ -791,16 +799,16 @@ def rebuild_performance(gc):
         return [total, wins, losses, pushes, wp, roi]
 
     gt_official = gt_buckets[4] + gt_buckets[5]
-    ml_all      = ml_b[3] + ml_b[4] + ml_b[5]
-    rl_all      = rl_b[3] + rl_b[4] + rl_b[5]
-    combo_b     = {s: ml_b[s] + rl_b[s] for s in (3, 4, 5)}
+    ml_all      = ml_b[4] + ml_b[5]
+    rl_all      = rl_b[4] + rl_b[5]
+    combo_b     = {s: ml_b[s] + rl_b[s] for s in PERF_STAR_TIERS}
     combo_all   = ml_all + rl_all
 
     gt_official_fix = gt_buckets_fix[4] + gt_buckets_fix[5]
-    ml_all_fix      = ml_b_fix[3] + ml_b_fix[4] + ml_b_fix[5]
-    rl_all_fix      = rl_b_fix[3] + rl_b_fix[4] + rl_b_fix[5]
-    combo_b_fix     = {s: ml_b_fix[s] + rl_b_combo[s] for s in (3, 4, 5)}
-    combo_all_fix   = ml_all_fix + rl_b_combo[3] + rl_b_combo[4] + rl_b_combo[5]
+    ml_all_fix      = ml_b_fix[4] + ml_b_fix[5]
+    rl_all_fix      = rl_b_fix[4] + rl_b_fix[5]
+    combo_b_fix     = {s: ml_b_fix[s] + rl_b_combo[s] for s in PERF_STAR_TIERS}
+    combo_all_fix   = ml_all_fix + rl_b_combo[4] + rl_b_combo[5]
 
     # ── Team Totals (from Bet History — authoritative; daily_tt already built above) ───
     tt_b     = {3: [], 4: [], 5: []}
@@ -820,7 +828,7 @@ def rebuild_performance(gc):
             u     = float(row[c_units_res]) if (c_units_res >= 0 and row[c_units_res]) else 0.0
         except (ValueError, TypeError):
             continue
-        if stars not in (3, 4, 5):
+        if stars not in PERF_STAR_TIERS:
             continue
         tt_b[stars].append((stars, u, result))
         # TT uses its OWN cutoff, not the shared MODEL_FIX_DATE. The 2026-08-07 rebuild
@@ -832,8 +840,8 @@ def rebuild_performance(gc):
         if date >= TT_RESCALE_DATE:
             tt_b_fix[stars].append((stars, u, result))
 
-    tt_all     = tt_b[3] + tt_b[4] + tt_b[5]
-    tt_all_fix = tt_b_fix[3] + tt_b_fix[4] + tt_b_fix[5]
+    tt_all     = tt_b[4] + tt_b[5]
+    tt_all_fix = tt_b_fix[4] + tt_b_fix[5]
 
 
     # ── Player Props (SP Strikeouts, Total Bases, Home Run, H+R+RBI) ─────────
@@ -866,7 +874,7 @@ def rebuild_performance(gc):
             u     = float(prow[pc_units_r]) if (pc_units_r >= 0 and prow[pc_units_r]) else 0.0
         except (ValueError, TypeError):
             continue
-        if stars not in (3, 4, 5):
+        if stars not in PERF_STAR_TIERS:
             continue
         cutoff = PROPS_MODEL_START_BY_TYPE.get(pt, PROPS_MODEL_START)
         if date < cutoff:
@@ -911,8 +919,8 @@ def rebuild_performance(gc):
         "H+R+RBI",
     ]
 
-    prop_all  = {pt: prop_b[pt][3] + prop_b[pt][4] + prop_b[pt][5] for pt in PROP_TYPES}
-    prop_all_fix = {pt: prop_b_fix[pt][3] + prop_b_fix[pt][4] + prop_b_fix[pt][5] for pt in PROP_TYPES}
+    prop_all  = {pt: prop_b[pt][4] + prop_b[pt][5] for pt in PROP_TYPES}
+    prop_all_fix = {pt: prop_b_fix[pt][4] + prop_b_fix[pt][5] for pt in PROP_TYPES}
 
     def full_row(label, gt, ml, rl, co, tt, *prop_lists):
         return build_data_row(label, gt, ml, rl, co, tt, *prop_lists)
@@ -936,8 +944,6 @@ def rebuild_performance(gc):
     perf_rows = [
         sec_hdr,
         col_hdr,
-        full_row("3-Star",  [],             ml_b[3],  rl_b[3],  combo_b[3],  tt_b[3],
-                 prop_b["SP Strikeouts"][3], prop_b["Total Bases"][3], prop_b["H+R+RBI"][3]),
         full_row("4-Star",  gt_buckets[4],  ml_b[4],  rl_b[4],  combo_b[4],  tt_b[4],
                  prop_b["SP Strikeouts"][4], prop_b["Total Bases"][4], prop_b["H+R+RBI"][4]),
         full_row("5-Star",  gt_buckets[5],  ml_b[5],  rl_b[5],  combo_b[5],  tt_b[5],
@@ -950,8 +956,6 @@ def rebuild_performance(gc):
         [f"SINCE RECALIBRATION ({MODEL_FIX_DATE}+ unless the column header says otherwise)"],
         sec_hdr_fix,
         col_hdr,
-        full_row("3-Star",  [],                 ml_b_fix[3],  rl_b_fix[3],  combo_b_fix[3],  tt_b_fix[3],
-                 prop_b_fix["SP Strikeouts"][3], prop_b_fix["Total Bases"][3], prop_b_fix["H+R+RBI"][3]),
         full_row("4-Star",  gt_buckets_fix[4],  ml_b_fix[4],  rl_b_fix[4],  combo_b_fix[4],  tt_b_fix[4],
                  prop_b_fix["SP Strikeouts"][4], prop_b_fix["Total Bases"][4], prop_b_fix["H+R+RBI"][4]),
         full_row("5-Star",  gt_buckets_fix[5],  ml_b_fix[5],  rl_b_fix[5],  combo_b_fix[5],  tt_b_fix[5],
