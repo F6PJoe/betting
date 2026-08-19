@@ -1035,7 +1035,61 @@ def rebuild_performance(gc):
     sheets_call(ws_perf.clear)
     time.sleep(2)
     sheets_call(ws_perf.update, perf_rows, value_input_option="USER_ENTERED")
-    print(f"Performance tab rebuilt ({len(all_dates)} days of history)")
+
+    # ── Re-apply layout formatting every rebuild ─────────────────────────────
+    # ws.clear() wipes VALUES only. Backgrounds and the frozen pane survive it and stay
+    # pinned to absolute row numbers, so they silently detach from the content the moment
+    # the row count changes. Dropping the 3-Star row on 2026-08-19 shifted the second
+    # block up by one: the shaded row stayed at the old position and ended up on a column
+    # header, while the frozen pane kept covering 15 rows and cut into the daily table.
+    # Nothing errored. It just looked wrong until someone noticed.
+    #
+    # So state the formatting from the layout itself rather than trusting whatever is
+    # already on the sheet. Any future row change now corrects on the next run.
+    # Clear across the FULL grid, not just the width of the data. The first version used
+    # max(len(row)) and left columns 56-62 shaded, because the old header formatting ran
+    # wider than the rows it was meant to decorate. Stale formatting always sits outside
+    # the range you think is relevant — that is what makes it stale.
+    n_rows = ws_perf.row_count
+    n_cols = ws_perf.col_count
+    sid = ws_perf.id
+    # Header rows are the two section-label rows, located by identity rather than by a
+    # hardcoded index — they are the rows carrying the section labels.
+    hdr_idx = [i for i, r in enumerate(perf_rows) if r and r[0] == "Star Level"
+               and any("TOTALS" in str(c) or "SHADOW" in str(c) for c in r)]
+    # Reset bold as well as background. Only ADDING bold to the header rows leaves the old
+    # bold wherever it used to sit — after the row shift that was row 9, a column header
+    # rendering bold while its counterpart in the first block did not.
+    requests = [{
+        "repeatCell": {
+            "range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": n_rows,
+                      "startColumnIndex": 0, "endColumnIndex": n_cols},
+            "cell": {"userEnteredFormat": {"backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                                           "textFormat": {"bold": False}}},
+            "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold",
+        }
+    }]
+    for i in hdr_idx:
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sid, "startRowIndex": i, "endRowIndex": i + 1,
+                          "startColumnIndex": 0, "endColumnIndex": n_cols},
+                "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                "fields": "userEnteredFormat.textFormat.bold",
+            }
+        })
+    # Freeze through the daily table's own header row so it stays visible while scrolling.
+    date_hdr = next((i for i, r in enumerate(perf_rows) if r and r[0] == "Date"), None)
+    frozen = (date_hdr + 1) if date_hdr is not None else 0
+    requests.append({
+        "updateSheetProperties": {
+            "properties": {"sheetId": sid, "gridProperties": {"frozenRowCount": frozen}},
+            "fields": "gridProperties.frozenRowCount",
+        }
+    })
+    sheets_call(ws_perf.spreadsheet.batch_update, {"requests": requests})
+    print(f"Performance tab rebuilt ({len(all_dates)} days of history), "
+          f"{frozen} rows frozen, backgrounds cleared")
 
 
 def grade_team_totals(ws_tt, scores: dict, yesterday: str) -> int:
