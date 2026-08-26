@@ -59,7 +59,7 @@ def _pool(lineups, pos):
 
 def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
                own_attr="own_large", bringback_target=0.90,
-               min_correlated=5, pool_tolerance=2):
+               min_correlated=5, pool_tolerance=2, max_per_game=5):
     """
     Run Part 24 against ONE contest's lineups. Returns a list of finding strings
     prefixed FAIL / WARN / INFO.
@@ -193,6 +193,21 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
     if solo:
         I("%d lineup(s) draw their correlation from a single game -- fine, but "
           "the QB stack is doing all the work" % solo)
+
+    # ── two RBs from one team, and game concentration ─────────────────────────
+    for i, lu in enumerate(lineups, 1):
+        for t, c in Counter(p.team for p in lu.players if p.pos == "RB").items():
+            if c > 1:
+                F("lineup %d rosters %d %s running backs -- they split one "
+                  "workload" % (i, c, t))
+        for g, c in Counter(p.game for p in lu.players if p.pos != "DST").items():
+            if c > max_per_game:
+                F("lineup %d takes %d players from %s (cap %d) -- that is "
+                  "concentration, not correlation" % (i, c, g, max_per_game))
+    deep = Counter(max(Counter(p.game for p in lu.players if p.pos != "DST").values())
+                   for lu in lineups)
+    I("heaviest game per lineup: " + ", ".join(
+        "%d players x%d" % (k, v) for k, v in sorted(deep.items())))
 
     # ── no uncorrelated team concentration ────────────────────────────────────
     for i, lu in enumerate(lineups, 1):

@@ -99,6 +99,36 @@ counting it would work against the RB + own-D/ST pairing in Part 32.
 
 ---
 
+## PART 31e — ONE RUNNING BACK PER TEAM
+
+Never roster two running backs from the same team. They split one workload, so
+they are closer to mutually exclusive than correlated.
+
+---
+
+## PART 31f — AT MOST 5 PLAYERS FROM ONE GAME
+
+Five is the ceiling of a legitimate construction: a double-stacked QB with a
+double bringback is QB + 2 + 2. Beyond that it is concentration rather than
+correlation. Rare but entirely possible, so it is a cap and not a target.
+
+D/ST is not counted — the Part 32 ban already keeps a defense out of any game
+the lineup is stacking both sides of.
+
+Note this cap rarely binds on its own: Part 31d already holds each side to two
+players unless a QB from that game is rostered, which puts the natural ceiling
+at four. It only matters once a QB in that game lifts those caps.
+
+---
+
+## PART 31g — SALARY FLOOR
+
+Lineups are built between **88% and 100% of the cap — $44,000 to $50,000**.
+Part 15 asks for roughly 10% of lineups at or below $49,000 but never says how
+far below; this is the floor.
+
+---
+
 ## PART 32 — D/ST PAIRING
 
 **Hard rule — never violate.** No player may appear in a lineup with the D/ST

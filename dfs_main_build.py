@@ -138,8 +138,24 @@ class BuildConfig:
     # scoring with the offense, and counting it would fight the RB+DST nudge.
     # Set to 0 to disable.
     max_uncorrelated_team: int = 2
+
+    # One running back per team. Two backs from the same team split one
+    # workload, so they are close to mutually exclusive rather than correlated.
+    max_rb_per_team: int = 1
+
+    # Players from a single game. Five is the natural ceiling of a legitimate
+    # construction — a double-stacked QB with a double bringback is QB + 2 + 2 —
+    # and anything beyond that is concentration rather than correlation. Rare
+    # but entirely possible, so it is a cap and not a target.
+    # DST is not counted: the D/ST-vs-players ban already keeps a defense out of
+    # any game this lineup is stacking both sides of.
+    max_per_game: int = 5
+
     min_unique: int = 1              # players that must differ from every prior lineup
-    salary_min: int = 0
+    # 88% of the cap, matching the user's own solver floor. Part 15 asks for
+    # ~10% of lineups at or below $49,000 but never says how far below; this
+    # stops a band of (0, 48_999) from producing a $40,000 lineup.
+    salary_min: int = 44_000
     salary_max: int = SALARY_CAP
     avoid_dst_vs_stack: bool = True  # never roster a DST facing your own QB
     max_per_team: int | None = None  # NOT a vNext.1 rule; off unless asked for
@@ -317,7 +333,7 @@ def salary_bands(n, cap=SALARY_CAP):
     lo = max(1, round(n * 0.10))
     rest = max(0, n - hi - mid - lo)
     return tuple([(49_800, cap)] * hi + [(49_000, 49_400)] * mid
-                 + [(0, 48_999)] * lo + [(49_401, 49_799)] * rest)[:n]
+                 + [(44_000, 48_999)] * lo + [(49_401, 49_799)] * rest)[:n]
 
 
 # ── Solver ────────────────────────────────────────────────────────────────────
@@ -511,6 +527,25 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
                 prob += (pulp.lpSum(y[p.dk_id] for p in skill)
                          <= cfg.max_uncorrelated_team
                          + ROSTER_SIZE * pulp.lpSum(y[p.dk_id] for p in own + vs))
+
+        # -- one RB per team --
+        if cfg.max_rb_per_team:
+            for t in teams:
+                backs = [p for p in live if p.pos == "RB" and p.team == t]
+                if len(backs) > cfg.max_rb_per_team:
+                    prob += (pulp.lpSum(y[p.dk_id] for p in backs)
+                             <= cfg.max_rb_per_team)
+
+        # -- players from any one game --
+        if cfg.max_per_game:
+            by_game = {}
+            for p in live:
+                if p.pos != "DST" and p.game:
+                    by_game.setdefault(p.game, []).append(p)
+            for g, members in by_game.items():
+                if len(members) > cfg.max_per_game:
+                    prob += (pulp.lpSum(y[p.dk_id] for p in members)
+                             <= cfg.max_per_game)
 
         if cfg.max_per_team:
             for t in teams:
