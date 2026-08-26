@@ -92,12 +92,26 @@ class BuildConfig:
     # players is usually ANTI-correlated with them.
     correlation_positions: tuple = ("QB", "RB", "WR", "TE")
 
-    # TE at FLEX (user rule, 2026-08-26). This overrides Part 12's "no arbitrary
-    # cap on TE FLEX" — the user was explicit that FLEX "should pretty much
-    # always be a WR or RB, each and every week." A TE reaches FLEX only when a
-    # lineup rosters two of them, so capping TE at one per lineup is the whole
-    # mechanism. Raise to 2 for a slate that genuinely warrants it.
+    # TE at FLEX (user rule, 2026-08-26). NOT banned, but rare: "maybe 1-2 weeks
+    # out of the year when there is some sort of a 'free square' TE or if
+    # salaries are REALLY REALLY REALLY tight." A TE reaches FLEX only in a
+    # two-TE roster, so this cap is the whole mechanism. Default 1 keeps TEs out
+    # of FLEX; raise to 2 for a week that genuinely earns it, as a deliberate
+    # decision rather than a default the optimizer drifts into.
     max_te: int = 1
+
+    # A player may NEVER share a lineup with the DST he is playing against
+    # (user, hard rule 2026-08-26): Lions DST rules out every Saints player.
+    # This is strictly broader than the old QB-only version, and it pushes the
+    # DST out of the stacked game entirely once a bringback is in play — you
+    # hold players on both sides, so neither defense is legal.
+    ban_dst_vs_players: bool = True
+
+    # A small nudge for rostering a DST alongside a running back from the SAME
+    # team — shared game script, and the user is fine with the pairing. Points,
+    # in the same units as `score`. Deliberately tiny: "a slight bump is fine so
+    # long as it doesn't materially start to force things to go that way."
+    rb_dst_bonus: float = 0.0
     min_unique: int = 1              # players that must differ from every prior lineup
     salary_min: int = 0
     salary_max: int = SALARY_CAP
@@ -340,6 +354,22 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
         if cfg.own_weight:
             obj -= cfg.own_weight * pulp.lpSum(
                 getattr(p, cfg.own_attr) * y[p.dk_id] for p in live)
+
+        # RB paired with his own DST: a small bonus, never a requirement. b_t can
+        # only be 1 when both a same-team RB and that DST are rostered, and since
+        # it only ever adds to the objective the solver claims it exactly when
+        # the pairing happens to occur.
+        if cfg.rb_dst_bonus:
+            for d in live:
+                if d.pos != "DST":
+                    continue
+                mates = [p for p in live if p.pos == "RB" and p.team == d.team]
+                if not mates:
+                    continue
+                b = pulp.LpVariable("rbdst_%s_%d" % (d.dk_id, n), cat="Binary")
+                prob += b <= y[d.dk_id]
+                prob += b <= pulp.lpSum(y[p.dk_id] for p in mates)
+                obj += cfg.rb_dst_bonus * b
         prob += obj
 
         # -- roster legality --
@@ -396,10 +426,14 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
                 back = [p for p in opp_skill.get(q.team, []) if p.dk_id in y]
                 if back:
                     prob += pulp.lpSum(y[p.dk_id] for p in back) >= y[q.dk_id]
-            if cfg.avoid_dst_vs_stack:
-                for d in live:
-                    if d.pos == "DST" and d.team == q.opp:
-                        prob += y[q.dk_id] + y[d.dk_id] <= 1
+        # -- a DST never shares a lineup with a player it faces (hard rule) --
+        if cfg.ban_dst_vs_players:
+            for d in live:
+                if d.pos != "DST":
+                    continue
+                for p in live:
+                    if p.pos != "DST" and p.team == d.opp:
+                        prob += y[d.dk_id] + y[p.dk_id] <= 1
 
         # -- pool-size caps (Parts 9/10/11/13) --
         # Must be a CONSTRAINT, not a pre-filter. A lineup can take two players

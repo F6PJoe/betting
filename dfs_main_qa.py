@@ -148,12 +148,14 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
               "Part 12 late-swap violation" % (i, flex.name, best.name))
     te_flex = flex_pos.get("TE", 0)
     if te_flex:
-        # User rule 2026-08-26, overriding Part 12's "no arbitrary cap on TE
-        # FLEX": FLEX "should pretty much always be a WR or RB, each and every
-        # week." Any TE at FLEX is worth surfacing, not just a high rate.
-        (F if te_flex / n > 0.10 else W)(
-            "%d lineup(s) (%.0f%%) put a TE at FLEX -- should be a WR or RB "
-            "almost always" % (te_flex, 100 * te_flex / n))
+        # Not banned, but rare: the user expects TE at FLEX in "maybe 1-2 weeks
+        # out of the year" — a free-square TE, or salaries that are genuinely
+        # desperate. So any occurrence is a prompt for that week's conversation,
+        # and a heavy rate is a failure until someone says otherwise.
+        (F if te_flex / n > 0.25 else W)(
+            "%d lineup(s) (%.0f%%) put a TE at FLEX -- expected ~never. Confirm "
+            "this week has a free-square TE or genuinely tight salaries"
+            % (te_flex, 100 * te_flex / n))
 
     # ── mini-correlation (user rule) ──────────────────────────────────────────
     corr = [lu.correlated_count() for lu in lineups]
@@ -169,6 +171,22 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
     if solo:
         I("%d lineup(s) draw their correlation from a single game -- fine, but "
           "the QB stack is doing all the work" % solo)
+
+    # ── DST vs the players it faces (hard rule) ───────────────────────────────
+    for i, lu in enumerate(lineups, 1):
+        dst = next((p for p in lu.players if p.pos == "DST"), None)
+        if not dst:
+            continue
+        against = [p.name for p in lu.players if p.pos != "DST" and p.team == dst.opp]
+        if against:
+            F("lineup %d rosters %s DST against its own %s -- hard rule"
+              % (i, dst.team, ", ".join(against)))
+    paired = sum(1 for lu in lineups
+                 if any(p.pos == "RB" and p.team == d.team
+                        for d in lu.players if d.pos == "DST"
+                        for p in lu.players))
+    I("RB paired with his own DST in %d/%d lineups (%.0f%%) -- nudged, never forced"
+      % (paired, n, 100 * paired / n))
 
     # ── Part 15: salary ───────────────────────────────────────────────────────
     sal = [lu.salary for lu in lineups]

@@ -84,6 +84,10 @@ POOL_CAPS = {"RB": 10, "WR": 16, "TE": 6, "DST": 7}
 # User rules added 2026-08-26, neither of which appears in MainRules_vNext.1:
 MIN_CORRELATED = 5  # players in games contributing 2+ to the lineup
 MIN_UNIQUE = 2      # players differing between ANY two lineups, all week
+MAX_TE = 1          # 2 allows TE at FLEX -- a deliberate weekly call, ~1-2
+                    # weeks a year (free-square TE, or brutal salaries)
+RB_DST_BONUS = 0.5  # points for an RB alongside his own DST. ~0.3% of a
+                    # lineup: enough to break a tie, not to steer the build
 
 SEED = 20260913     # deterministic portfolios; bump to reshuffle
 
@@ -164,7 +168,8 @@ def run(entries, salaries, projections=None, out_dir=None):
         cfg = B.BuildConfig(
             n_lineups=n, approved_qbs=approved, min_stack=stack,
             require_bringback=True, min_unique=MIN_UNIQUE,
-            min_correlated=MIN_CORRELATED, max_te=1,
+            min_correlated=MIN_CORRELATED, max_te=MAX_TE,
+            ban_dst_vs_players=True, rb_dst_bonus=RB_DST_BONUS,
             randomness=jitter, seed=SEED + i,
             max_exposure=EXPOSURE_CAPS, max_pool=POOL_CAPS,
             salary_schedule=B.salary_bands(n) if banded else ())
