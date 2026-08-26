@@ -82,6 +82,23 @@ always fine.
 
 ---
 
+## PART 31d — NO UNCORRELATED TEAM CONCENTRATION
+
+**At most 2 players from any one team** when neither that team's QB nor the
+opposing QB is in the lineup.
+
+LaPorta + Gibbs + ARSB with no Goff and no Saints QB is banned. Gibbs + ARSB is
+fine — and in practice that pair only appears when something like Olave is also
+there tying the game together.
+
+Either quarterback lifts the cap: their own makes it a stack, the opponent's
+makes them bringbacks off the other side of the same game.
+
+D/ST does not count toward the two. It shares no scoring with the offense, and
+counting it would work against the RB + own-D/ST pairing in Part 32.
+
+---
+
 ## PART 32 — D/ST PAIRING
 
 **Hard rule — never violate.** No player may appear in a lineup with the D/ST

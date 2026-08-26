@@ -150,10 +150,18 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
           % (with_rb, n))
 
     # ── Part 12: FLEX ─────────────────────────────────────────────────────────
-    flex_pos = Counter(lu.slots["FLEX"].pos for lu in lineups)
-    I("FLEX: " + ", ".join("%s %d (%.0f%%)" % (k, v, 100 * v / n)
-                           for k, v in flex_pos.most_common()))
-    for i, lu in enumerate(lineups, 1):
+    # Only lineups with a well-formed slot map; the malformed ones already FAILed
+    # above. QA exists to report broken input, so it must not crash on it.
+    slotted = [lu for lu in lineups if set(lu.slots) == set(SLOT_ORDER)]
+    if not slotted:
+        out.append("WARN  [%s] no lineup has a usable slot map -- FLEX, late-swap "
+                   "and TE-at-FLEX checks skipped" % label)
+        slotted = []
+    flex_pos = Counter(lu.slots["FLEX"].pos for lu in slotted)
+    if flex_pos:
+        I("FLEX: " + ", ".join("%s %d (%.0f%%)" % (k, v, 100 * v / len(slotted))
+                               for k, v in flex_pos.most_common()))
+    for i, lu in enumerate(slotted, 1):
         flex = lu.slots["FLEX"]
         peers = [p for p in lu.players if p.pos == flex.pos]
         best = max(peers, key=lambda p: (p.kickoff, p.salary))
@@ -161,15 +169,15 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
             F("lineup %d: %s is in FLEX but %s starts later or costs more -- "
               "Part 12 late-swap violation" % (i, flex.name, best.name))
     te_flex = flex_pos.get("TE", 0)
-    if te_flex:
+    if te_flex and slotted:
         # Not banned, but rare: the user expects TE at FLEX in "maybe 1-2 weeks
         # out of the year" — a free-square TE, or salaries that are genuinely
         # desperate. So any occurrence is a prompt for that week's conversation,
         # and a heavy rate is a failure until someone says otherwise.
-        (F if te_flex / n > 0.25 else W)(
+        (F if te_flex / len(slotted) > 0.25 else W)(
             "%d lineup(s) (%.0f%%) put a TE at FLEX -- expected ~never. Confirm "
             "this week has a free-square TE or genuinely tight salaries"
-            % (te_flex, 100 * te_flex / n))
+            % (te_flex, 100 * te_flex / len(slotted)))
 
     # ── mini-correlation (user rule) ──────────────────────────────────────────
     corr = [lu.correlated_count() for lu in lineups]
@@ -185,6 +193,18 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
     if solo:
         I("%d lineup(s) draw their correlation from a single game -- fine, but "
           "the QB stack is doing all the work" % solo)
+
+    # ── no uncorrelated team concentration ────────────────────────────────────
+    for i, lu in enumerate(lineups, 1):
+        qb = lu.qb
+        by_team = Counter(p.team for p in lu.players if p.pos in ("RB", "WR", "TE"))
+        for t, c in by_team.items():
+            if c <= 2:
+                continue
+            if qb and t in (qb.team, qb.opp):
+                continue
+            F("lineup %d has %d %s players with neither %s's QB nor the opposing "
+              "QB rostered -- uncorrelated concentration" % (i, c, t, t))
 
     # ── DST vs the players it faces (hard rule) ───────────────────────────────
     for i, lu in enumerate(lineups, 1):

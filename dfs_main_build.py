@@ -126,6 +126,18 @@ class BuildConfig:
     # in the same units as `score`. Deliberately tiny: "a slight bump is fine so
     # long as it doesn't materially start to force things to go that way."
     rb_dst_bonus: float = 0.0
+
+    # At most this many skill players from one team when NEITHER that team's QB
+    # nor the opposing QB is rostered (user rule, 2026-08-26). Three Lions with
+    # no Goff and no Saints QB is uncorrelated concentration; two is fine, and
+    # in practice a Gibbs + ARSB pair only shows up when something like Olave is
+    # there tying the game together anyway.
+    #
+    # Either QB lifts the cap: their own makes it a stack, the opponent's makes
+    # them all bringbacks off the other side. DST is not counted — it shares no
+    # scoring with the offense, and counting it would fight the RB+DST nudge.
+    # Set to 0 to disable.
+    max_uncorrelated_team: int = 2
     min_unique: int = 1              # players that must differ from every prior lineup
     salary_min: int = 0
     salary_max: int = SALARY_CAP
@@ -352,7 +364,11 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
     teams = {p.team for p in full}
     catchers = {t: [p for p in full if p.team == t and p.pos in PASS_CATCHER]
                 for t in teams}
-    opp_of = {q.team: q.opp for q in qbs}
+    # Every team's opponent, not just the approved QBs' teams — the
+    # uncorrelated-concentration rule needs this for all 24-32 of them, and
+    # deriving it from `qbs` alone would leave most lookups None and silently
+    # switch the rule off for those teams.
+    opp_of = {p.team: p.opp for p in full if p.opp}
     opp_skill = {t: [p for p in full if p.pos in SKILL and p.team == opp_of.get(t)]
                  for t in teams}
 
@@ -480,6 +496,21 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
             newcomers = [p for p in live if p.pos == pos and p.dk_id not in seen[pos]]
             if newcomers:
                 prob += pulp.lpSum(y[p.dk_id] for p in newcomers) <= max(0, room)
+
+        # -- no uncorrelated team concentration --
+        # skill(t) <= cap + BIG * (t's QB rostered + t's opponent's QB rostered).
+        # Only one QB is ever rostered, so the bracket is 0 or 1 and BIG only has
+        # to clear the roster to make the cap vanish when a relevant QB is there.
+        if cfg.max_uncorrelated_team:
+            for t in teams:
+                skill = [p for p in live if p.team == t and p.pos in SKILL]
+                if len(skill) <= cfg.max_uncorrelated_team:
+                    continue
+                own = [p for p in live if p.pos == "QB" and p.team == t]
+                vs = [p for p in live if p.pos == "QB" and p.team == opp_of.get(t)]
+                prob += (pulp.lpSum(y[p.dk_id] for p in skill)
+                         <= cfg.max_uncorrelated_team
+                         + ROSTER_SIZE * pulp.lpSum(y[p.dk_id] for p in own + vs))
 
         if cfg.max_per_team:
             for t in teams:
