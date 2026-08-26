@@ -33,6 +33,7 @@ player choices are MEANINGLESS. It exists to prove the upload format, not to be
 entered as-is. The runner says so loudly, in the console and in the filename.
 """
 
+import json
 import os
 import sys
 
@@ -44,10 +45,50 @@ import dfs_main_qa as QA
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Week 1 2026 counts, supplied by the user. Update every week — these drive the
-# leverage ladder, so a stale number silently mis-tunes the whole portfolio.
-FIELD_SIZES = {"$5": 832_342, "$1": 178_359, "$3": 158_541,
-               "$0.25": 118_906, "$0.10": 2_972}
+# Entry counts live in a JSON file next to the slate data, NOT in this source,
+# because they change every week and a stale number silently mis-tunes the whole
+# leverage ladder. The runner HARD STOPS when the file is missing or stamped for
+# a different slate date -- the user asked to be asked rather than have a build
+# quietly proceed on last week's fields.
+#
+#   {"slate_date": "2026-09-13",
+#    "fields": {"$5": 832342, "$1": 178359, "$3": 158541,
+#               "$0.25": 118906, "$0.10": 2972}}
+FIELDS_FILE = os.path.join(ING.SLATE_DIR, "entry_counts.json")
+
+
+def load_field_sizes(slate_date):
+    """
+    Entry counts for THIS slate, or a hard stop.
+
+    Returns (fields, None) or (None, reason). Never guesses, never falls back to
+    a previous week: leverage is driven by field size, so a wrong number here is
+    worse than no build at all.
+    """
+    want = slate_date.strftime("%Y-%m-%d") if slate_date else None
+    template = ('{"slate_date": "%s", "fields": {"$5": 0, "$3": 0, "$1": 0, '
+                '"$0.25": 0, "$0.10": 0}}' % (want or "YYYY-MM-DD"))
+
+    if not os.path.exists(FIELDS_FILE):
+        return None, ("no entry counts on file. Ask the user for this week's "
+                      "counts, then write %s as:  %s" % (FIELDS_FILE, template))
+    try:
+        data = json.load(open(FIELDS_FILE, encoding="utf-8"))
+    except (ValueError, OSError) as e:
+        return None, "%s is unreadable: %s" % (FIELDS_FILE, e)
+
+    stamped = str(data.get("slate_date", "")).strip()
+    if want and stamped != want:
+        return None, ("entry counts are stamped %s but this slate kicks off %s -- "
+                      "they are a previous week's. Ask the user for the current "
+                      "counts before building." % (stamped or "(nothing)", want))
+    fields = data.get("fields") or {}
+    missing = [f for f in ("$5", "$3", "$1", "$0.25", "$0.10") if not fields.get(f)]
+    if missing:
+        return None, ("entry counts missing for: %s -- ask the user"
+                      % ", ".join(missing))
+    return {k: int(v) for k, v in fields.items()}, None
+
 
 # label, DK fee string, lineups, min_stack, randomness, salary-banded?
 # Ordered smallest field first — see the build-order note above.
@@ -162,6 +203,19 @@ def run(entries, salaries, projections=None, out_dir=None):
         print("\nWARN  pool is only %d players. The full rule set needs ~120+; "
               "below ~100 it cannot solve at all." % len(pool))
 
+    # HARD STOP on missing or stale entry counts. The user asked to be asked
+    # rather than have a build quietly run on last week's field sizes — leverage
+    # rides entirely on these, so a wrong number is worse than no build.
+    slate_date = next((p.kickoff for p in players if p.kickoff), None)
+    fields, why = load_field_sizes(slate_date)
+    if fields is None:
+        print("\nSTOP  %s" % why)
+        return 2
+    print("\nEntry counts (%s): %s" % (
+        slate_date.strftime("%Y-%m-%d") if slate_date else "undated",
+        "  ".join("%s %s" % (k, format(v, ","))
+                  for k, v in sorted(fields.items(), key=lambda kv: -kv[1]))))
+
     approved, source, qb_list = approved_qb_pool(pool)
     print("\nApproved QB pool (%s):" % source)
     for q in qb_list:
@@ -182,7 +236,7 @@ def run(entries, salaries, projections=None, out_dir=None):
             salary_schedule=B.salary_bands(n) if banded else ())
         lus, note = B.build_portfolio(pool, cfg, score=score, existing=portfolio)
         print("  %-6s %2d lineups  field %9s  %s"
-              % (label, len(lus), format(FIELD_SIZES.get(fee, 0), ","), note or "ok"))
+              % (label, len(lus), format(fields.get(fee, 0), ","), note or "ok"))
         if len(lus) < n:
             print("     SHORT -- %s" % note)
             return 1
