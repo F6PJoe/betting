@@ -173,11 +173,14 @@ class BuildConfig:
     seed: int | None = None          # set for reproducible portfolios
 
     # Exposure ceilings. Keys may be a POSITION ('RB') or a dk_id; a dk_id always
-    # wins over its position. The user's solver runs a flat 40% global and then
-    # sets per-player maxima by hand once the pool is trimmed, using ownership
-    # projections to dial them — so `exposure_default` is that global and the
-    # per-player entries are the weekly overrides.
-    exposure_default: float = 0.40
+    # wins over its position.
+    #
+    # There is NO global cap by default, and that is deliberate. The user runs
+    # 100% in his own solver on purpose and sets every exposure by hand once the
+    # pool is trimmed, weighing ownership projections, point projections and the
+    # shape of the pool together. A blanket ceiling would silently pre-empt a
+    # decision that is supposed to be made per player, per week.
+    exposure_default: float = 1.0
     max_exposure: dict = field(default_factory=dict)   # {'RB': .5, '43727325': .6}
 
     # Exposure FLOORS, by dk_id. Part 10's Option C is explicit that the top

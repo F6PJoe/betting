@@ -108,16 +108,15 @@ CONTEST_PLAN = (
     ("MILLY", "$5",    10, 2, 0.09, True),   # 832,342 — its own set, ceiling only
 )
 
-# Flat 40% global ceiling, matching the user's own solver. His screenshot shows
-# 100%, but that is not the real setting -- he trims the pool first and then sets
-# per-player maxima by hand, dialled off ownership projections. So the global is
-# 40% and the weekly overrides go in EXPOSURE_OVERRIDES / EXPOSURE_FLOORS as
-# dk_id -> fraction, once we have ownership to dial them from.
+# NO global exposure ceiling. The user runs 100% in his own solver on purpose
+# and sets every exposure by hand once the pool is trimmed, weighing ownership
+# projections, point projections and the pool together. A blanket cap would
+# silently pre-empt a per-player, per-week decision.
 #
-# Note the flat global alone leaves DST around 4 against a 5-7 target. That is
-# inside Part 34's tolerance and resolves once per-player numbers are set.
-EXPOSURE_DEFAULT = 0.40
-EXPOSURE_OVERRIDES = {}   # dk_id -> max, set weekly from ownership + tier
+# These two are filled in at build time, once that conversation has happened.
+# Until then the placeholder portfolios will concentrate hard on whoever scores
+# best, which is the honest reflection of no exposure decisions having been made.
+EXPOSURE_OVERRIDES = {}   # dk_id -> max, set weekly from ownership + projection
 EXPOSURE_FLOORS = {}      # dk_id -> min; Part 10 Option C protection for top WRs
 
 # Pool ceilings. The user is explicit these are NOT black-and-white: "each
@@ -238,7 +237,6 @@ def run(entries, salaries, projections=None, out_dir=None):
             min_correlated=MIN_CORRELATED, max_te=MAX_TE,
             ban_dst_vs_players=True, rb_dst_bonus=RB_DST_BONUS,
             randomness=jitter, seed=SEED + i,
-            exposure_default=EXPOSURE_DEFAULT,
             max_exposure=EXPOSURE_OVERRIDES, min_exposure=EXPOSURE_FLOORS,
             max_pool=POOL_CAPS,
             salary_schedule=B.salary_bands(n) if banded else ())

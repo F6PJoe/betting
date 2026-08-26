@@ -131,11 +131,12 @@ far below; this is the floor.
 
 ## PART 31h — EXPOSURE
 
-Global ceiling is **40%**, applied to every player by default.
+**There is no global exposure ceiling**, deliberately. Every exposure is set
+per player, per week, once the pool is trimmed — weighing ownership projections,
+point projections and the shape of the pool together.
 
-Per-player maxima and minima are then set by hand each week, once the pool is
-trimmed, using ownership projections to dial them. Those overrides are the real
-instrument; the global is only what catches anyone not explicitly set.
+A blanket cap would pre-empt that decision silently, which is why the solver
+runs at 100% rather than at some default.
 
 **Minimums matter as much as maxima.** Part 10's Option C requires meaningful
 minimum exposure on the top receivers so strong plays are not accidentally
