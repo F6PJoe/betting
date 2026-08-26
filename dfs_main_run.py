@@ -159,8 +159,7 @@ def run(entries, salaries, projections=None, out_dir=None):
     # fails outright around 100, even after every permitted relaxation. The
     # correlation floor and the D/ST ban are what consume the room.
     if len(pool) < 120:
-        print("
-WARN  pool is only %d players. The full rule set needs ~120+; "
+        print("\nWARN  pool is only %d players. The full rule set needs ~120+; "
               "below ~100 it cannot solve at all." % len(pool))
 
     approved, source, qb_list = approved_qb_pool(pool)
