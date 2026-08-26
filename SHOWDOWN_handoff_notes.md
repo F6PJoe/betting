@@ -1,102 +1,113 @@
-# Notes for the Showdown chat — carried over from the Main Slate build
+# Data / file-handling notes — carried over from the Main Slate build
 
-Paste this into the Showdown conversation. It is everything learned building the
-Main Slate pipeline that applies to Showdown, plus an explicit list of what does
-NOT, so Main Slate rules never get applied to a single-game slate by mistake.
+Back-end only. Nothing here concerns lineup construction; Showdown has its own
+rules for that. These are file formats, parsing hazards and upload mechanics
+that were confirmed against real DraftKings files.
 
----
+## The DKEntries export contains the full player pool
 
-## 1. DraftKings file facts (all confirmed, all format-level)
+Not just entry rows. A second table starts at the row/column where a cell reads
+`Position`, carrying `Name + ID`, `Name`, `ID`, `Roster Position`, `Salary`,
+`Game Info`, `TeamAbbrev`, `AvgPointsPerGame`. Its ID set was verified identical
+to DKSalaries.
 
-- **The DKEntries export contains the full player pool**, not just entry rows.
-  It starts at the row/column where a cell reads `Position`, and carries
-  `Name + ID`, `Roster Position`, `Salary`, `Game Info`, `TeamAbbrev`. Locate it
-  by searching for that header, never a fixed offset — DK moves these columns.
-- **DKSalaries has a `Status` column that DKEntries lacks** (Q / OUT / IR / D).
-  It is the only injury feed in the file drop. OUT and IR are hard excludes.
-- **DK's two files disagree on D/ST names.** DKEntries writes `'Chargers '`
-  with a trailing space; DKSalaries writes `'Chargers'`. Concatenated to
-  `Name (ID)` that produces a double space. Always rebuild the upload string
-  from a stripped name rather than copying DK's own `Name + ID`.
-- **DK's bulk upload accepts `Name (ID)` or the bare ID, never a bare name**
-  (their instruction #4), and you should **submit only the rows you are
-  changing** (#5) — so cash-game rows get dropped from the upload, not blanked.
-- **The weekly projections file carries Showdown-specific columns**:
-  `CPT Salary`, `CPT Projection`, `CPT Own` alongside the FLEX equivalents, plus
-  `Small Field` and `Large Field` ownership. Both ownership columns sum to ~900%
-  across the roster, so they are true normalized pOwn, not ratings.
-- The projections `id` column is *probably* the DK Player ID — 8-digit, unique,
-  position-blocked exactly how DK assigns them. **Not yet confirmed.** Verify by
-  joining a projections file and a salary file from the SAME slate; if it
-  matches, name-matching disappears from the primary join entirely.
+**Find that block by searching for the `Position` header, never by a fixed row
+or column offset** — DK has moved these columns before.
 
-## 2. Process lessons that cost real time to learn
+`Game Info` is the only source of kickoff times anywhere in the file drop.
 
-- **Your written prompt is not the authoritative rule set.** The Main Slate
-  prompt was ChatGPT describing only its own half of a two-part workflow — it
-  did the pool, your solver did construction — so no construction rules were in
-  it. Nine rules had to be recovered conversationally. **Screenshot your
-  Showdown solver's settings early** and hand them over in one pass.
-- **Entry counts drive leverage, not entry fee.** Ask for them every week and
-  never fall back to a previous slate's numbers. Week 1 2026 Main Slate: the $1
-  field (178,359) was LARGER than the $3 (158,541), which inverts the usual
-  assumption.
-- **Exposure is a per-player, per-week decision.** No global cap. Set every min
-  and max by hand once the pool is trimmed, weighing ownership projections,
-  point projections and pool shape together.
-- **Minimum exposure matters as much as maximum.** Without a floor, a strong
-  play can silently reach zero. This is a known past failure ("zero-exposure
-  stars") and it is mechanically preventable.
-- **Verify the upload file by re-reading it from disk** and reconstructing every
-  lineup, rather than trusting the code that wrote it. Wrong-contest Entry IDs,
-  a set that only replicated to four of five contests, and a name DK cannot
-  parse are all silent failures that surface on Sunday.
+## DKSalaries has one column DKEntries does not: `Status`
 
-## 3. Duplication — this matters MORE in Showdown
+Values are `Q`, `OUT`, `IR`, `D`. It is the only injury feed in the files.
+Treat OUT and IR as hard excludes and surface Q/D for a human call. On the Week
+1 main slate this was 101 Q, 9 OUT, 24 IR, 1 D out of 719 players — not a
+rounding error.
 
-Measured against real contest results:
+## DK's two files disagree with each other on D/ST names
 
-| Slate | Entries | Most-duplicated lineup | Naive model predicted |
-|---|---|---|---|
-| Wk 11 Main | 237,600 | **443x** | 0.12 |
-| Wk 12 Main | 237,604 | **419x** | 0.08 |
+```
+DKSalaries      Name='Chargers'    Name+ID='Chargers (43728525)'
+DKEntries pool  Name='Chargers '   Name+ID='Chargers  (43728525)'
+```
 
-Multiplying player ownerships together **understates real duplication by three
-to four orders of magnitude.** Duplication comes from correlated *construction*,
-not independent player selection.
+Every D/ST in the entries export carries a trailing space; none in the salary
+export do. **Always rebuild the upload string as `name.strip() + " (" + id + ")"`
+rather than copying DK's own `Name + ID` field.** Copying it verbatim produces a
+double space. The weekly projections file has the same trailing-space problem on
+D/ST names independently.
 
-Showdown is worse: a six-player roster drawn from ~40 players duplicates far
-more readily than a nine-player roster drawn from 300. Manage it through
-Captain choice, salary and construction combinations — never by reaching for
-low-owned players. Any duplication estimate must be calibrated against real
-contest results, never derived.
+## DraftKings' own upload rules, from the Instructions column
 
-## 4. What does NOT transfer — do not apply these to Showdown
+- Use `Name + ID` **or** the bare ID. A bare player name is rejected.
+- **Include only the entries you are actually changing.** So cash-game rows
+  should be dropped from the upload file, not left blank.
+- Preserve the header row byte-for-byte from the export and pad data rows to its
+  width, so the file you upload is structurally identical to the one DK issued.
 
-Every one of these is a Main Slate rule that is meaningless or wrong in a
-single-game format:
+## The weekly projections file
 
-- **The correlation floor of 5.** In Showdown every player is in the same game,
-  so the metric is degenerate. Showdown correlation is about Captain choice and
-  game-script pairing instead.
-- **QB stacking, bringback, and mini-correlation** as defined for Main Slate.
-- **Max 5 players from one game.** All six are, by definition.
-- **Max 2 players from one team without that team's QB.** Replaced by Showdown
-  team-split logic (4-2, 3-3, 5-1 and so on).
-- **FLEX late-swap.** One game means everything locks together; there is no
-  latest-starting player to place.
-- **Positional pool targets** (QB 3-5, RB 6-10, WR 12-16, TE 4-6, DST 5-7) and
-  the TE-at-FLEX rule. Both are Main Slate roster constructs.
-- **Part 15 salary bands and the $44,000 floor.** The Captain multiplier changes
-  the salary structure entirely.
-- **One RB per team** probably still holds on workload-split logic, but it is
-  worth re-deciding rather than assuming.
+Columns confirmed: `Player`, `DK Pos`, `Team`, `Opp`, `DK Salary`, `DK Proj`,
+`DK Value`, `Small Field`, `Large Field`, `DK Floor`, `DK Ceiling`, `id`. The
+Showdown version adds `CPT Salary`, `CPT Projection`, `CPT Own` alongside the
+FLEX equivalents — so the Captain slot has real projections and real ownership
+rather than needing a 1.5x approximation.
 
-## 5. Things worth deciding early in the Showdown chat
+**Both ownership columns are true normalized pOwn**, not ratings — they sum to
+~900% across a nine-man roster. Check that sum on arrival; if it comes back far
+off, the column is not what it appears to be.
 
-- Captain rules — is any position ever excluded from Captain? Minimum projection
-  or ownership thresholds for the Captain slot?
-- Team split constraints, and whether any split is banned outright.
-- Whether kickers and D/ST are in play, and any rules pairing or opposing them.
-- Portfolio shape — the note on file says 40 unique lineups across 80 entries.
-- Whether the same "no lineup repeats across sets" rule applies.
+**Validate the column names before reading a single row.** Every field access is
+a lookup that quietly returns 0.0 on a rename, and a slate of zero projections
+looks exactly like a file that has not posted yet.
+
+## The `id` column is probably the DK Player ID — but unverified
+
+It is 8-digit, unique, and blocked by position exactly the way DK assigns IDs
+within a draft group. It has never been checked against a salary file from the
+**same** slate, because the files on hand were from different weeks.
+
+Verify it the first chance you get. If it holds, name-matching disappears from
+the primary join entirely.
+
+## Name and team normalization hazards, all confirmed real
+
+Sources spell the same player differently:
+
+```
+Travis Etienne      vs  Travis Etienne Jr.
+Amon-Ra St Brown    vs  Amon-Ra St. Brown
+AJ Brown            vs  A.J. Brown
+Kenneth Walker      vs  Kenneth Walker III
+Michael Pittman     vs  Michael Pittman Jr.
+Hollywood Brown     vs  Marquise Brown        <- normalization cannot fix this
+```
+
+Team abbreviations collide too: the projections file writes the Rams as `LA`
+where DK writes `LAR`. Also watch `JAC`/`JAX`, `WSH`/`WAS`, `ARZ`/`ARI`.
+
+A normalizer must strip accents, punctuation, whitespace and generational
+suffixes — and still needs a hand-maintained alias table for cases like
+Hollywood/Marquise Brown where the strings genuinely differ.
+
+There is already a working one in the Betting Models repo:
+`nfl_props_data.py` → `normalize_name()` and `NAME_ALIASES`. Reuse it rather
+than writing a second.
+
+## DK lists every backup QB; the projections file lists only starters
+
+DK had 91 QBs across 24 teams on the Week 1 main slate. The projection source
+had exactly one per team — it has already resolved starters. The intersection of
+the two is therefore the eligible-QB list, and any disagreement between them
+should be flagged rather than resolved automatically.
+
+## Verify the finished upload file by re-reading it from disk
+
+Do not trust the code that wrote it. Re-read the file, reconstruct every lineup
+from it, and compare against what was intended. Wrong-contest Entry IDs, a set
+that only replicated to some of its contests, an over-cap roster, or a name DK
+cannot parse are all **silent** failures — nothing raises, and they surface on
+Sunday when the entries are locked.
+
+## Ask for contest entry counts each week
+
+They are not in any file. Never carry over a previous slate's numbers.
