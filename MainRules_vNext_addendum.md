@@ -51,6 +51,31 @@ bringback is a weaker tournament play than his projection suggests.
 This extends Part 6, which already lists *stack quality* and *bringback
 quality* among QB evaluation criteria, to the pool-building step generally.
 
+### 31b — Correlation quality is capped inside Part 5's budget
+
+Correlation quality is one more context adjustment, sharing the same **~±5%**
+ceiling as aFPA, DVP and the rest. It is enough to flip players already close
+together — the "slightly weaker play with really good correlation" case — and
+deliberately not enough to lift a player over a genuine projection gap.
+
+Partner quality is measured on **ceiling, not projection**: correlation only
+pays in the scenario where the game actually goes off.
+
+---
+
+## PART 31c — RUNNING BACKS AS STACK PARTNERS
+
+A running back should **very selectively** be a QB's stack partner, and should
+essentially never be the **only** one. It takes a special receiving back —
+a CMC or Gibbs type — and even then he belongs in a double stack alongside a
+receiver rather than in place of one.
+
+Designating such a back is a deliberate weekly decision about a named player,
+never a standing rule. Default is that no RB counts toward the stack.
+
+An RB as a **bringback** against an opposing QB stack needs no designation and
+is always fine.
+
 ---
 
 ## PART 32 — D/ST PAIRING
