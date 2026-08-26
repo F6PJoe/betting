@@ -155,6 +155,14 @@ def run(entries, salaries, projections=None, out_dir=None):
             print("\nValidation gate FAILED -- not building.")
             return 1
 
+    # Measured 2026-08-26: the full rule set solves cleanly at 120+ players and
+    # fails outright around 100, even after every permitted relaxation. The
+    # correlation floor and the D/ST ban are what consume the room.
+    if len(pool) < 120:
+        print("
+WARN  pool is only %d players. The full rule set needs ~120+; "
+              "below ~100 it cannot solve at all." % len(pool))
+
     approved, source, qb_list = approved_qb_pool(pool)
     print("\nApproved QB pool (%s):" % source)
     for q in qb_list:

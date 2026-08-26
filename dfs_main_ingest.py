@@ -64,6 +64,15 @@ TEAM_ALIASES = {
     "CLV": "CLE", "BLT": "BAL", "HST": "HOU", "SL": "LAR",
 }
 
+# Columns load_projections() reads. Checked up front because every downstream
+# access is a .get() that would quietly yield 0.0 on a renamed column — a whole
+# slate of zero projections looks exactly like "the file has not posted yet".
+# "DK Value" is deliberately absent: the parser never reads it.
+REQUIRED_PROJECTION_COLS = (
+    "Player", "DK Pos", "Team", "Opp", "DK Salary", "DK Proj",
+    "DK Floor", "DK Ceiling", "Small Field", "Large Field", "id",
+)
+
 # DK marks unavailable players in DKSalaries.Status. OUT/IR are hard excludes;
 # Q/D are judgment calls that belong in the Part 22 late-news pass, not here.
 STATUS_HARD_EXCLUDE = {"OUT", "IR"}
@@ -215,8 +224,20 @@ def load_projections(path):
     unstripped it concatenates to "Texans  (41199346)" — the double space seen
     throughout last season's lineup files. Stripped once, here.
     """
+    rdr = csv.DictReader(open(path, encoding="utf-8-sig"))
+    have = {(c or "").strip() for c in (rdr.fieldnames or [])}
+    missing = [c for c in REQUIRED_PROJECTION_COLS if c not in have]
+    if missing:
+        raise ValueError(
+            "%s is missing required column(s): %s\n"
+            "        found: %s\n"
+            "        Every .get() below would silently return 0.0 instead, so "
+            "this refuses rather than building on zeros. If the source renamed "
+            "a column, map it in load_projections()."
+            % (os.path.basename(path), ", ".join(missing), ", ".join(sorted(have))))
+
     out = []
-    for r in csv.DictReader(open(path, encoding="utf-8-sig")):
+    for r in rdr:
         name = (r.get("Player") or "").strip()
         if not name:
             continue

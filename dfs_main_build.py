@@ -333,16 +333,16 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
     rng = random.Random(cfg.seed)
     used = Counter()                    # dk_id -> lineups containing him
     seen = defaultdict(set)             # pos -> distinct dk_ids used so far
-    relaxed = 0
+    relaxed = {}
 
-    def eligible():
+    def eligible(slack=0.0):
         """Pool minus anyone who has hit his exposure ceiling."""
         blocked = {dk_id for dk_id, c in used.items()
                    if (cfg.max_exposure.get(idx[dk_id].pos) is not None
-                       and c >= cfg.max_exposure[idx[dk_id].pos] * cfg.n_lineups)}
+                       and c >= (cfg.max_exposure[idx[dk_id].pos] + slack) * cfg.n_lineups)}
         return [p for p in full if p.dk_id not in blocked]
 
-    def solve(live, smin, smax):
+    def solve(live, smin, smax, pool_slack=0, uniq=None):
         prob = pulp.LpProblem("dfs_main", pulp.LpMaximize)
         y = {p.dk_id: pulp.LpVariable("y_" + p.dk_id, cat="Binary") for p in live}
 
@@ -441,7 +441,7 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
         # once the pool is already full lets it jump 5 -> 7 in a single solve and
         # blow straight through Part 11's hard maximum of 6. Caught 2026-08-26.
         for pos, limit in cfg.max_pool.items():
-            room = limit - len(seen[pos])
+            room = limit + pool_slack - len(seen[pos])
             newcomers = [p for p in live if p.pos == pos and p.dk_id not in seen[pos]]
             if newcomers:
                 prob += pulp.lpSum(y[p.dk_id] for p in newcomers) <= max(0, room)
@@ -458,27 +458,49 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
         # -- Parts 19/20 uniqueness, including across contests via `existing` --
         for prior in cuts:
             prob += (pulp.lpSum(y[i] for i in prior if i in y)
-                     <= ROSTER_SIZE - cfg.min_unique)
+                     <= ROSTER_SIZE - (cfg.min_unique if uniq is None else uniq))
 
         if pulp.LpStatus[prob.solve(pulp.PULP_CBC_CMD(msg=0))] != "Optimal":
             return None
         return [idx[i] for i, v in y.items() if v.value() and v.value() > 0.5]
 
     for n in range(cfg.n_lineups):
-        live = eligible()
         band = (cfg.salary_schedule[n] if n < len(cfg.salary_schedule)
                 else (cfg.salary_min, cfg.salary_max))
+        wide = (cfg.salary_min, cfg.salary_max)
 
-        chosen = solve(live, band[0], band[1])
-        if chosen is None and band != (cfg.salary_min, cfg.salary_max):
-            # The salary band, not the rules, made this infeasible. Part 15's
-            # bands are guides; drop the band rather than a correlation rule.
-            chosen = solve(live, cfg.salary_min, cfg.salary_max)
+        # Relaxation ladder, least damaging first. Part 29: "If constraints
+        # conflict, identify the conflict and discuss the least damaging
+        # adjustment." Everything above the line is guidance in the rules;
+        # nothing below it is ever touched -- the correlation floor, the D/ST
+        # ban, stacking, bringback, the TE cap, the Part 2 QB gate and roster
+        # legality all hold or the lineup does not get built.
+        #
+        # This exists because a realistic ~150-player pool went infeasible at
+        # lineup 16 of the fourth set where the 386-player placeholder pool did
+        # not. Failing outright there would have surfaced on a Sunday.
+        ladder = (
+            ("",                    band, 0, None),
+            ("salary band dropped", wide, 0, None),
+            ("pool caps +2",        wide, 2, None),
+            ("uniqueness 2 -> 1",   wide, 2, 1),
+            ("exposure caps +10pt", wide, 2, 1),
+        )
+        chosen = why = None
+        for i, (label, (smin, smax), slack, uniq) in enumerate(ladder):
+            live = eligible(0.10 if i == 4 else 0.0)
+            chosen = solve(live, smin, smax, pool_slack=slack, uniq=uniq)
             if chosen is not None:
-                relaxed += 1
+                why = label
+                break
         if chosen is None:
-            return lineups, ("infeasible on lineup %d of %d -- constraints are "
-                             "over-tight for this pool" % (n + 1, cfg.n_lineups))
+            return lineups, ("infeasible on lineup %d of %d even after every "
+                             "permitted relaxation -- the pool is too thin for "
+                             "the correlation and stacking rules"
+                             % (n + 1, cfg.n_lineups))
+        if why:
+            relaxed.setdefault(why, 0)
+            relaxed[why] += 1
 
         lu = Lineup(chosen)
         lu.slots = assign_slots(chosen)
@@ -488,12 +510,11 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
             used[p.dk_id] += 1
             seen[p.pos].add(p.dk_id)
         if verbose:
-            print("  %2d  $%s  %.1f  stack %d  bringback %s"
+            print("  %2d  $%s  %.1f  stack %d  corr %d  %s"
                   % (n + 1, format(lu.salary, ","), sum(score(p) for p in chosen),
-                     lu.stack_size(), "Y" if lu.has_bringback() else "N"))
+                     lu.stack_size(), lu.correlated_count(), why or ""))
 
     note = None
     if relaxed:
-        note = ("%d of %d lineups could not hit their Part 15 salary band and "
-                "were solved without it" % (relaxed, cfg.n_lineups))
+        note = "relaxed: " + "; ".join("%s x%d" % (k, v) for k, v in relaxed.items())
     return lineups, note
