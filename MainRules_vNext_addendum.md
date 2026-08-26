@@ -65,16 +65,20 @@ pays in the scenario where the game actually goes off.
 
 ## PART 31c — RUNNING BACKS AS STACK PARTNERS
 
-A running back should **very selectively** be a QB's stack partner, and should
-essentially never be the **only** one. It takes a special receiving back —
-a CMC or Gibbs type — and even then he belongs in a double stack alongside a
-receiver rather than in place of one.
+**Any running back may be part of a QB stack.** Burrow with Ja'Marr Chase *and*
+Chase Brown is a perfectly good double stack, and the RB counts toward both the
+stack size and the correlation total.
 
-Designating such a back is a deliberate weekly decision about a named player,
-never a standing rule. Default is that no RB counts toward the stack.
+**What is banned is the RB being the ONLY stack partner.** Burrow with Chase
+Brown and no receiver, or Cam Ward with Tony Pollard, is the construction to
+avoid. At least one WR/TE is required alongside.
 
-An RB as a **bringback** against an opposing QB stack needs no designation and
-is always fine.
+**The rare exemption.** Once in a blue moon a back may stand alone as the whole
+stack. This is decided per week, for a named player, and asked about explicitly
+before the build — never inferred, and usually the answer is none.
+
+An RB as a **bringback** against an opposing QB stack needs no exemption and is
+always fine.
 
 ---
 

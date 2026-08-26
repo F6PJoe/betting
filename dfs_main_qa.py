@@ -135,6 +135,20 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
         W("%d naked QB lineup(s) -- Part 7 wants strong slate-specific "
           "justification, normally substantial rushing upside" % naked)
 
+    # An RB may be part of a stack, never the whole of one, unless explicitly
+    # exempted for the week. QB + Chase Brown alone is the case being blocked;
+    # QB + Ja'Marr Chase + Chase Brown is a fine double stack.
+    rb_only = [i for i, lu in enumerate(lineups, 1)
+               if lu.stack_size() and not lu.pass_catcher_stack()]
+    for i in rb_only[:6]:
+        F("lineup %d stacks the QB with an RB and no pass catcher -- an RB may "
+          "be part of a stack, not the whole of it" % i)
+    with_rb = sum(1 for lu in lineups
+                  if lu.stack_size() > lu.pass_catcher_stack())
+    if with_rb:
+        I("%d/%d lineups include an RB as a stack piece alongside a receiver"
+          % (with_rb, n))
+
     # ── Part 12: FLEX ─────────────────────────────────────────────────────────
     flex_pos = Counter(lu.slots["FLEX"].pos for lu in lineups)
     I("FLEX: " + ", ".join("%s %d (%.0f%%)" % (k, v, 100 * v / n)

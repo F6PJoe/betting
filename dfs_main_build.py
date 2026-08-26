@@ -76,18 +76,19 @@ class BuildConfig:
     min_stack: int = 1               # stack partners rostered with the QB
     require_bringback: bool = True
 
-    # Running backs who may count as a QB stack partner THIS WEEK, by dk_id.
-    # Empty by default, and that is the normal state (user, 2026-08-26): "a RB
-    # should very selectively be the only QB stacking partner. It would take a
-    # special player like MAYBE CMC or Gibbs." Designating one is a deliberate
-    # weekly call about a specific receiving back, never a standing rule.
+    # ANY running back may be a stack partner alongside a pass catcher — Burrow
+    # with Ja'Marr Chase AND Chase Brown is a perfectly good double stack. What
+    # is banned is the RB being the ONLY partner: Burrow + Chase Brown with no
+    # receiver, or Cam Ward + Tony Pollard.
     #
-    # Even when designated, an RB can never be the ONLY partner — "they are VERY
-    # likely to be part of a double stack and not the only stacking partner" —
-    # so at least one WR/TE is required regardless of min_stack.
-    # An RB as a BRINGBACK against an opposing stack needs no designation; that
-    # is always allowed and is handled by SKILL, not by this.
-    stack_rbs: frozenset = frozenset()
+    # solo_stack_rbs is the rare exemption, by dk_id, naming backs who MAY stand
+    # alone as the whole stack this week. Empty is the normal state and will
+    # usually stay empty — "very rarely, if ever, ... but once in a blue moon it
+    # is possible." Ask the user each week; never infer it.
+    #
+    # An RB as a BRINGBACK against an opposing stack needs no exemption at all;
+    # that is always fine and is handled by SKILL.
+    solo_stack_rbs: frozenset = frozenset()
 
     # MINI-CORRELATION (user rule, 2026-08-26; not in MainRules_vNext.1).
     # At least this many rostered players must sit in a game from which the
@@ -184,7 +185,21 @@ class Lineup:
         return frozenset(p.dk_id for p in self.players)
 
     def stack_size(self):
-        """Pass catchers rostered alongside the QB's own team."""
+        """
+        Skill players rostered from the QB's own team.
+
+        Counts RBs, because the user counts them: Burrow with Ja'Marr Chase and
+        Chase Brown "would be fine as that would be a double stack." Use
+        pass_catcher_stack() for the WR/TE-only figure.
+        """
+        q = self.qb
+        if not q:
+            return 0
+        return sum(1 for p in self.players
+                   if p.team == q.team and p.pos in SKILL)
+
+    def pass_catcher_stack(self):
+        """WR/TE only. Zero here with stack_size() >= 1 means an RB-only stack."""
         q = self.qb
         if not q:
             return 0
@@ -433,11 +448,13 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
                 continue
             if cfg.min_stack:
                 cat = [p for p in catchers[q.team] if p.dk_id in y]
-                # A pass catcher is always required, so a designated RB can be
-                # the second stack piece but never the only one.
-                prob += pulp.lpSum(y[p.dk_id] for p in cat) >= y[q.dk_id]
-                rbs = [p for p in live if p.pos == "RB" and p.team == q.team
-                       and p.dk_id in cfg.stack_rbs]
+                rbs = [p for p in live if p.pos == "RB" and p.team == q.team]
+                # The stack must never be an RB standing alone: at least one
+                # pass catcher, unless a back explicitly exempted this week is
+                # rostered. Any RB counts toward the size of the stack itself.
+                solo = [p for p in rbs if p.dk_id in cfg.solo_stack_rbs]
+                prob += (pulp.lpSum(y[p.dk_id] for p in cat)
+                         + pulp.lpSum(y[p.dk_id] for p in solo) >= y[q.dk_id])
                 prob += (pulp.lpSum(y[p.dk_id] for p in cat + rbs)
                          >= cfg.min_stack * y[q.dk_id])
             if cfg.require_bringback:
