@@ -172,10 +172,22 @@ class BuildConfig:
     randomness: float = 0.0
     seed: int | None = None          # set for reproducible portfolios
 
-    # Exposure ceilings and pool-size caps, per position, as fractions/counts.
-    # Enforced by banning a player once he hits his ceiling, which is what keeps
-    # Parts 9/10/16's "~60% even for elite plays" from being quietly exceeded.
-    max_exposure: dict = field(default_factory=dict)   # {'RB': 0.60, ...}
+    # Exposure ceilings. Keys may be a POSITION ('RB') or a dk_id; a dk_id always
+    # wins over its position. The user's solver runs a flat 40% global and then
+    # sets per-player maxima by hand once the pool is trimmed, using ownership
+    # projections to dial them — so `exposure_default` is that global and the
+    # per-player entries are the weekly overrides.
+    exposure_default: float = 0.40
+    max_exposure: dict = field(default_factory=dict)   # {'RB': .5, '43727325': .6}
+
+    # Exposure FLOORS, by dk_id. Part 10's Option C is explicit that the top
+    # receivers need "meaningful minimum exposure so strong plays are not
+    # accidentally eliminated by ownership penalties", and Part 16 asks the same
+    # for top RB/WR/TE. Without this a player can quietly reach zero.
+    #
+    # Enforced by locking a player in once the lineups he still needs equal the
+    # lineups left to build, which is exact rather than best-effort.
+    min_exposure: dict = field(default_factory=dict)   # {'43727325': 0.30}
     max_pool: dict = field(default_factory=dict)       # {'TE': 6, ...} Part 11 hard max
 
     # Part 15 salary diversification: per-lineup (min, max) bands. Deliberately
@@ -395,14 +407,40 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
     seen = defaultdict(set)             # pos -> distinct dk_ids used so far
     relaxed = {}
 
+    def ceiling_for(p):
+        """Per-player override, else position, else the global default."""
+        if p.dk_id in cfg.max_exposure:
+            return cfg.max_exposure[p.dk_id]
+        return cfg.max_exposure.get(p.pos, cfg.exposure_default)
+
     def eligible(slack=0.0):
         """Pool minus anyone who has hit his exposure ceiling."""
-        blocked = {dk_id for dk_id, c in used.items()
-                   if (cfg.max_exposure.get(idx[dk_id].pos) is not None
-                       and c >= (cfg.max_exposure[idx[dk_id].pos] + slack) * cfg.n_lineups)}
+        blocked = set()
+        for dk_id, c in used.items():
+            cap = ceiling_for(idx[dk_id])
+            if cap is not None and c >= (cap + slack) * cfg.n_lineups:
+                blocked.add(dk_id)
         return [p for p in full if p.dk_id not in blocked]
 
-    def solve(live, smin, smax, pool_slack=0, uniq=None):
+    def forced(n_done):
+        """
+        Players who must appear in this lineup for their floor to be reachable.
+
+        Once the lineups a player still needs equals the lineups still to build,
+        he has to be in every one of them. Checking it each iteration makes the
+        floor exact instead of hopeful.
+        """
+        left = cfg.n_lineups - n_done
+        out = set()
+        for dk_id, frac in cfg.min_exposure.items():
+            if dk_id not in idx:
+                continue
+            need = int(round(frac * cfg.n_lineups)) - used[dk_id]
+            if need >= left > 0:
+                out.add(dk_id)
+        return out
+
+    def solve(live, smin, smax, pool_slack=0, uniq=None, lock=()):
         prob = pulp.LpProblem("dfs_main", pulp.LpMaximize)
         y = {p.dk_id: pulp.LpVariable("y_" + p.dk_id, cat="Binary") for p in live}
 
@@ -552,7 +590,7 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
                 prob += pulp.lpSum(y[p.dk_id] for p in live
                                    if p.team == t and p.pos != "DST") <= cfg.max_per_team
 
-        for dk_id in cfg.locked:
+        for dk_id in tuple(cfg.locked) + tuple(lock):
             if dk_id in y:
                 prob += y[dk_id] == 1
 
@@ -590,7 +628,12 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
         chosen = why = None
         for i, (label, (smin, smax), slack, uniq) in enumerate(ladder):
             live = eligible(0.10 if i == 4 else 0.0)
-            chosen = solve(live, smin, smax, pool_slack=slack, uniq=uniq)
+            must = forced(n)
+            # A forced player outranks his own ceiling; the floor was set
+            # deliberately and the ceiling is usually just the global default.
+            live = live + [idx[d] for d in must
+                           if d in idx and idx[d] not in live]
+            chosen = solve(live, smin, smax, pool_slack=slack, uniq=uniq, lock=must)
             if chosen is not None:
                 why = label
                 break

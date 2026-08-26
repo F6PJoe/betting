@@ -129,6 +129,21 @@ far below; this is the floor.
 
 ---
 
+## PART 31h — EXPOSURE
+
+Global ceiling is **40%**, applied to every player by default.
+
+Per-player maxima and minima are then set by hand each week, once the pool is
+trimmed, using ownership projections to dial them. Those overrides are the real
+instrument; the global is only what catches anyone not explicitly set.
+
+**Minimums matter as much as maxima.** Part 10's Option C requires meaningful
+minimum exposure on the top receivers so strong plays are not accidentally
+eliminated, and Part 16 asks the same for top RB/WR/TE. Without a floor a
+player can quietly reach zero and nobody notices.
+
+---
+
 ## PART 32 — D/ST PAIRING
 
 **Hard rule — never violate.** No player may appear in a lineup with the D/ST

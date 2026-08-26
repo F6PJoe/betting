@@ -108,12 +108,18 @@ CONTEST_PLAN = (
     ("MILLY", "$5",    10, 2, 0.09, True),   # 832,342 — its own set, ceiling only
 )
 
-# Exposure ceilings that make the Part 9/10/11/13 POOL targets achievable.
-# These are deliberately tighter than the "elite plays may reach 40-60%"
-# allowance in Parts 9/10/16, because without real projections there is no
-# elite play to protect. Once the weekly projections land, the tier framework
-# sets these per player and the ceilings loosen for the genuine studs.
-EXPOSURE_CAPS = {"QB": 0.40, "RB": 0.45, "WR": 0.35, "TE": 0.45, "DST": 0.20}
+# Flat 40% global ceiling, matching the user's own solver. His screenshot shows
+# 100%, but that is not the real setting -- he trims the pool first and then sets
+# per-player maxima by hand, dialled off ownership projections. So the global is
+# 40% and the weekly overrides go in EXPOSURE_OVERRIDES / EXPOSURE_FLOORS as
+# dk_id -> fraction, once we have ownership to dial them from.
+#
+# Note the flat global alone leaves DST around 4 against a 5-7 target. That is
+# inside Part 34's tolerance and resolves once per-player numbers are set.
+EXPOSURE_DEFAULT = 0.40
+EXPOSURE_OVERRIDES = {}   # dk_id -> max, set weekly from ownership + tier
+EXPOSURE_FLOORS = {}      # dk_id -> min; Part 10 Option C protection for top WRs
+
 # Pool ceilings. The user is explicit these are NOT black-and-white: "each
 # week is different and you could go slightly above or below the target when
 # it makes sense." So QA carries a +/-2 tolerance and only reports a real miss
@@ -232,7 +238,9 @@ def run(entries, salaries, projections=None, out_dir=None):
             min_correlated=MIN_CORRELATED, max_te=MAX_TE,
             ban_dst_vs_players=True, rb_dst_bonus=RB_DST_BONUS,
             randomness=jitter, seed=SEED + i,
-            max_exposure=EXPOSURE_CAPS, max_pool=POOL_CAPS,
+            exposure_default=EXPOSURE_DEFAULT,
+            max_exposure=EXPOSURE_OVERRIDES, min_exposure=EXPOSURE_FLOORS,
+            max_pool=POOL_CAPS,
             salary_schedule=B.salary_bands(n) if banded else ())
         lus, note = B.build_portfolio(pool, cfg, score=score, existing=portfolio)
         print("  %-6s %2d lineups  field %9s  %s"
