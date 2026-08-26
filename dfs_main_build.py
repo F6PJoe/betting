@@ -31,6 +31,7 @@ optimal against the constraints active at the time it was cut.
 """
 
 import random
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -74,6 +75,29 @@ class BuildConfig:
     approved_qbs: frozenset | None = None
     min_stack: int = 1               # pass catchers rostered with the QB
     require_bringback: bool = True
+
+    # MINI-CORRELATION (user rule, 2026-08-26; not in MainRules_vNext.1).
+    # At least this many rostered players must sit in a game from which the
+    # lineup takes TWO OR MORE players. A lone player in a game correlates with
+    # nobody and counts zero.
+    #
+    # The user's own arithmetic, which this reproduces exactly:
+    #   QB + his WR + an opposing WR            = 3 in that game
+    #   a WR elsewhere + an opposing player     = 2 in that game   -> 5
+    #   double-stacked QB makes the first group 4                  -> 6
+    # "The more correlation the better. I wouldn't necessarily force it beyond
+    # 5" — so this is a floor, never a target the objective chases.
+    min_correlated: int = 0
+    # DST is excluded by default: a defense sharing a game with your skill
+    # players is usually ANTI-correlated with them.
+    correlation_positions: tuple = ("QB", "RB", "WR", "TE")
+
+    # TE at FLEX (user rule, 2026-08-26). This overrides Part 12's "no arbitrary
+    # cap on TE FLEX" — the user was explicit that FLEX "should pretty much
+    # always be a WR or RB, each and every week." A TE reaches FLEX only when a
+    # lineup rosters two of them, so capping TE at one per lineup is the whole
+    # mechanism. Raise to 2 for a slate that genuinely warrants it.
+    max_te: int = 1
     min_unique: int = 1              # players that must differ from every prior lineup
     salary_min: int = 0
     salary_max: int = SALARY_CAP
@@ -145,6 +169,29 @@ class Lineup:
         if not q:
             return False
         return any(p.team == q.opp and p.pos in SKILL for p in self.players)
+
+    def correlated_count(self, positions=("QB", "RB", "WR", "TE")):
+        """
+        Players sitting in a game this lineup takes two or more players from.
+
+        The user's mini-correlation floor is 5. A player alone in his game
+        correlates with nobody and contributes zero, which is why this counts
+        game clusters rather than pairs.
+        """
+        by_game = {}
+        for p in self.players:
+            if p.pos in positions and p.game:
+                by_game.setdefault(p.game, []).append(p)
+        return sum(len(v) for v in by_game.values() if len(v) >= 2)
+
+    def game_clusters(self, positions=("QB", "RB", "WR", "TE")):
+        """{game: n} for games contributing 2+ players, largest first."""
+        by_game = {}
+        for p in self.players:
+            if p.pos in positions and p.game:
+                by_game[p.game] = by_game.get(p.game, 0) + 1
+        return dict(sorted(((g, n) for g, n in by_game.items() if n >= 2),
+                           key=lambda kv: -kv[1]))
 
 
 # ── FLEX assignment (Part 12) ─────────────────────────────────────────────────
@@ -303,6 +350,33 @@ def build_portfolio(players, cfg, score=lambda p: p.proj, existing=None, verbose
             sel = pulp.lpSum(y[p.dk_id] for p in live if p.pos == pos)
             prob += sel >= BASE[pos]
             prob += sel <= BASE[pos] + 1     # at most one position takes the FLEX
+        # TE at FLEX is a two-TE lineup by definition; cap TE to forbid it.
+        prob += pulp.lpSum(y[p.dk_id] for p in live if p.pos == "TE") <= cfg.max_te
+
+        # -- mini-correlation --
+        # A player counts as correlated only if his GAME contributes >= 2 players.
+        # z_g flags "this game is in play", k_g is how many of its players count.
+        # k_g is bounded by the actual count, so pushing the sum to the floor
+        # makes k_g equal that count; no incentive to overstate.
+        if cfg.min_correlated:
+            games = {}
+            for p in live:
+                if p.pos in cfg.correlation_positions and p.game:
+                    games.setdefault(p.game, []).append(p)
+            terms = []
+            for g, members in games.items():
+                if len(members) < 2:
+                    continue
+                count = pulp.lpSum(y[p.dk_id] for p in members)
+                z = pulp.LpVariable("z_%s_%d" % (re.sub(r"\W", "", g), n), cat="Binary")
+                k = pulp.LpVariable("k_%s_%d" % (re.sub(r"\W", "", g), n),
+                                    lowBound=0, upBound=ROSTER_SIZE)
+                prob += count >= 2 * z          # a game only counts with 2+ players
+                prob += k <= count
+                prob += k <= ROSTER_SIZE * z
+                terms.append(k)
+            if terms:
+                prob += pulp.lpSum(terms) >= cfg.min_correlated
 
         # -- salary --
         spend = pulp.lpSum(p.salary * y[p.dk_id] for p in live)

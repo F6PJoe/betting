@@ -73,8 +73,17 @@ CONTEST_PLAN = (
 # elite play to protect. Once the weekly projections land, the tier framework
 # sets these per player and the ceilings loosen for the genuine studs.
 EXPOSURE_CAPS = {"QB": 0.40, "RB": 0.45, "WR": 0.35, "TE": 0.45, "DST": 0.20}
-POOL_CAPS = {"RB": 10, "WR": 16, "TE": 6, "DST": 7}   # upper end of each stated
-# target; TE 6 is the only one the rules call a HARD maximum (Part 11).
+# Pool ceilings. The user is explicit these are NOT black-and-white: "each
+# week is different and you could go slightly above or below the target when
+# it makes sense." So QA carries a +/-2 tolerance and only reports a real miss
+# outside it. The SOLVER still aims at the stated maxima, because they turn out
+# to be reachable -- headroom of +1 or +2 here just made every pool drift up to
+# whatever ceiling it was given without improving anything.
+POOL_CAPS = {"RB": 10, "WR": 16, "TE": 6, "DST": 7}
+
+# User rules added 2026-08-26, neither of which appears in MainRules_vNext.1:
+MIN_CORRELATED = 5  # players in games contributing 2+ to the lineup
+MIN_UNIQUE = 2      # players differing between ANY two lineups, all week
 
 SEED = 20260913     # deterministic portfolios; bump to reshuffle
 
@@ -154,7 +163,8 @@ def run(entries, salaries, projections=None, out_dir=None):
     for i, (label, fee, n, stack, jitter, banded) in enumerate(CONTEST_PLAN):
         cfg = B.BuildConfig(
             n_lineups=n, approved_qbs=approved, min_stack=stack,
-            require_bringback=True, min_unique=1,
+            require_bringback=True, min_unique=MIN_UNIQUE,
+            min_correlated=MIN_CORRELATED, max_te=1,
             randomness=jitter, seed=SEED + i,
             max_exposure=EXPOSURE_CAPS, max_pool=POOL_CAPS,
             salary_schedule=B.salary_bands(n) if banded else ())
@@ -170,7 +180,8 @@ def run(entries, salaries, projections=None, out_dir=None):
     print("\n=== Part 24 QA ===")
     fails = 0
     for label, lus in sets:
-        for f in QA.qa_contest(lus, label, approved_qbs=approved):
+        for f in QA.qa_contest(lus, label, approved_qbs=approved,
+                               min_correlated=MIN_CORRELATED):
             if f.startswith("FAIL"):
                 fails += 1
                 print(f)

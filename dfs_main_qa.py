@@ -58,7 +58,8 @@ def _pool(lineups, pos):
 
 
 def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
-               own_attr="own_large", bringback_target=0.90):
+               own_attr="own_large", bringback_target=0.90,
+               min_correlated=5, pool_tolerance=2):
     """
     Run Part 24 against ONE contest's lineups. Returns a list of finding strings
     prefixed FAIL / WARN / INFO.
@@ -145,11 +146,29 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
         if best.dk_id != flex.dk_id:
             F("lineup %d: %s is in FLEX but %s starts later or costs more -- "
               "Part 12 late-swap violation" % (i, flex.name, best.name))
-    te_flex = flex_pos.get("TE", 0) / n
-    if te_flex > 0.35:
-        W("TE FLEX is %.0f%% -- Part 12 sanity check: confirm this is driven by "
-          "genuinely elite TE plays or exceptional pricing, not by salary "
-          "forcing or an oversized TE pool" % (100 * te_flex))
+    te_flex = flex_pos.get("TE", 0)
+    if te_flex:
+        # User rule 2026-08-26, overriding Part 12's "no arbitrary cap on TE
+        # FLEX": FLEX "should pretty much always be a WR or RB, each and every
+        # week." Any TE at FLEX is worth surfacing, not just a high rate.
+        (F if te_flex / n > 0.10 else W)(
+            "%d lineup(s) (%.0f%%) put a TE at FLEX -- should be a WR or RB "
+            "almost always" % (te_flex, 100 * te_flex / n))
+
+    # ── mini-correlation (user rule) ──────────────────────────────────────────
+    corr = [lu.correlated_count() for lu in lineups]
+    I("correlated players/lineup: min %d  mean %.1f  max %d  (floor %d)"
+      % (min(corr), mean(corr), max(corr), min_correlated))
+    short = [(i, c) for i, c in enumerate(corr, 1) if c < min_correlated]
+    for i, c in short[:8]:
+        F("lineup %d has only %d correlated players (floor %d) -- a player alone "
+          "in his game counts zero" % (i, c, min_correlated))
+    if len(short) > 8:
+        F("...and %d more lineups under the correlation floor" % (len(short) - 8))
+    solo = sum(1 for lu in lineups if len(lu.game_clusters()) < 2)
+    if solo:
+        I("%d lineup(s) draw their correlation from a single game -- fine, but "
+          "the QB stack is doing all the work" % solo)
 
     # ── Part 15: salary ───────────────────────────────────────────────────────
     sal = [lu.salary for lu in lineups]
@@ -195,14 +214,19 @@ def qa_contest(lineups, label, approved_qbs=None, check_pools=None,
         elif not check_pools:
             I("%s pool %d (target %d-%d, %s -- not enforced on a %d-lineup set)"
               % (pos, size, lo, hi_, part, n))
+        elif size < lo - pool_tolerance or size > hi_ + pool_tolerance:
+            W("%s pool is %d, well outside the %d-%d target (%s)"
+              % (pos, size, lo, hi_, part))
         elif size < lo or size > hi_:
-            W("%s pool is %d, outside the %d-%d target (%s)"
+            # User 2026-08-26: "not a black and white rule ... you could go
+            # slightly above or below the target when it makes sense."
+            I("%s pool %d, just outside the %d-%d target (%s) -- within tolerance"
               % (pos, size, lo, hi_, part))
         else:
             I("%s pool %d (target %d-%d)" % (pos, size, lo, hi_))
 
     qlo, qhi, _ = POOL_TARGETS["QB"]
-    if check_pools and not (qlo <= len(qb_counts) <= qhi):
+    if check_pools and not (qlo - 1 <= len(qb_counts) <= qhi + 1):
         W("QB pool is %d, outside the %d-%d target (Part 6)"
           % (len(qb_counts), qlo, qhi))
 
@@ -253,16 +277,20 @@ def qa_portfolio(sets, own_attr="own_large"):
             "te": len(_pool(lus, "TE")), "dst": len(_pool(lus, "DST")),
             "dbl": sum(1 for lu in lus if lu.stack_size() >= 2) / len(lus),
             "back": sum(1 for lu in lus if lu.has_bringback()) / len(lus),
+            "corr": mean(lu.correlated_count() for lu in lus),
+            "teflex": sum(1 for lu in lus if lu.slots["FLEX"].pos == "TE") / len(lus),
         })
 
-    out.append("%-10s%4s %8s %8s %8s %9s %4s %4s %4s %4s %4s %7s %7s"
+    out.append("%-10s%4s %8s %8s %8s %9s %4s %4s %4s %4s %4s %7s %7s %5s %6s"
                % ("contest", "n", "proj", "ceiling", "pOwn", "salary",
-                  "QB", "RB", "WR", "TE", "DST", "2stack", "bring"))
+                  "QB", "RB", "WR", "TE", "DST", "2stack", "bring",
+                  "corr", "TEflx"))
     for r in rows:
-        out.append("%-10s%4d %8.1f %8.1f %8.0f %9s %4d %4d %4d %4d %4d %6.0f%% %6.0f%%"
+        out.append("%-10s%4d %8.1f %8.1f %8.0f %9s %4d %4d %4d %4d %4d %6.0f%% %6.0f%% %5.1f %5.0f%%"
                    % (r["label"], r["n"], r["proj"], r["ceil"], r["own"],
                       "$" + format(int(r["sal"]), ","), r["qb"], r["rb"], r["wr"],
-                      r["te"], r["dst"], 100 * r["dbl"], 100 * r["back"]))
+                      r["te"], r["dst"], 100 * r["dbl"], 100 * r["back"],
+                      r["corr"], 100 * r["teflex"]))
 
     # overlap between portfolios
     for i in range(len(sets)):
