@@ -41,7 +41,11 @@ PLAYER_PROP_MARKETS = (
     "player_pass_yds,player_pass_tds,player_rush_yds,"
     "player_reception_yds,player_receptions,player_anytime_td"
 )
-FETCH_PLAYER_PROPS  = False  # flip to True only after explicit user confirmation
+# ENABLED 2026-08-30 on explicit owner confirmation for Week 1.
+# Cost: markets x games = 7 x 16 ~= 112 credits per full pass. Only the MORNING
+# run should carry props; game-day closing snapshots use --lines-only (1
+# credit/game) so density near kickoff stays cheap.
+FETCH_PLAYER_PROPS  = True
 
 # ── Week scoping ─────────────────────────────────────────────────────────────
 # The Odds API returns the ENTIRE regular season in one call — measured

@@ -1,0 +1,107 @@
+name: NFL Line Snapshots (CLV)
+
+# INSTRUMENTATION ONLY — captures closing lines for CLV. No analysis, no picks.
+# Uses --lines-only (~19 credits) instead of the morning run's ~149 with props.
+#
+# WHY THE TIMES LOOK ODD
+# ----------------------
+# The closing line worth measuring is the one AFTER the inactive list drops,
+# which happens exactly 90 minutes before kickoff and moves lines materially —
+# a QB scratch is worth points, not cents. So a snapshot has to land inside
+# [kickoff-90min, kickoff].
+#
+# But GitHub Actions cron fires 29-57 MINUTES LATE (measured on this repo:
+# 08:00->08:44, 08:00->08:47, 18:30->18:59, 12:30->13:27). Aiming a single cron
+# at T-90 can therefore land after kickoff. The answer is DENSITY, not better
+# aim: several crons per kickoff window so at least one lands inside it.
+#
+# DAYLIGHT SAVING: cron is UTC and the NFL season crosses the DST change
+# (1 Nov 2026). A 1:00 PM ET kickoff is 17:00 UTC in EDT but 18:00 UTC in EST.
+# The windows below are deliberately widened to cover BOTH, which costs a few
+# extra 19-credit snapshots rather than risking a missed close.
+# >>> REVIEW THESE TIMES IN EARLY NOVEMBER once EST is in effect. <<<
+#
+# Games that have already kicked off are skipped by the fetcher, and empty
+# responses are free, so out-of-window firings cost little.
+
+on:
+  schedule:
+    # ── Sunday early window (1:00 PM ET = 17:00 UTC EDT / 18:00 UTC EST) ──
+    - cron: '30 14 * * 0'
+    - cron: '0 15 * * 0'
+    - cron: '30 15 * * 0'
+    - cron: '0 16 * * 0'
+    - cron: '30 16 * * 0'
+    - cron: '0 17 * * 0'
+    # ── Sunday afternoon window (4:05/4:25 PM ET) ──
+    - cron: '0 18 * * 0'
+    - cron: '30 18 * * 0'
+    - cron: '0 19 * * 0'
+    - cron: '30 19 * * 0'
+    - cron: '0 20 * * 0'
+    - cron: '30 20 * * 0'
+    # ── Sunday night (8:20 PM ET) — spills into Monday UTC ──
+    - cron: '0 22 * * 0'
+    - cron: '30 22 * * 0'
+    - cron: '0 23 * * 0'
+    - cron: '30 23 * * 0'
+    - cron: '0 0 * * 1'
+    - cron: '30 0 * * 1'
+    # ── Monday Night Football (8:15 PM ET) — Tuesday in UTC ──
+    - cron: '0 23 * * 1'
+    - cron: '30 23 * * 1'
+    - cron: '0 0 * * 2'
+    - cron: '30 0 * * 2'
+    # ── Thursday Night Football (8:15 PM ET) — Friday in UTC ──
+    - cron: '0 23 * * 4'
+    - cron: '30 23 * * 4'
+    - cron: '0 0 * * 5'
+    - cron: '30 0 * * 5'
+    # ── Week 1 only: the season opener is a WEDNESDAY (9 Sep 2026, 8:20 PM ET).
+    # Harmless the rest of the season — no Wednesday games means the fetcher
+    # finds nothing upcoming and the run costs ~3 credits.
+    - cron: '0 23 * * 3'
+    - cron: '30 23 * * 3'
+    - cron: '0 0 * * 4'
+  workflow_dispatch:
+
+env:
+  TZ: America/New_York
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install gspread google-auth requests python-dotenv tzdata
+                          nfl_data_py pandas appdirs fastparquet pdfplumber
+
+      - name: Write Google credentials
+        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google_credentials.json
+
+      - name: Create .env file
+        run: echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
+
+      # --lines-only skips the per-event prop calls: ~19 credits instead of ~149.
+      - name: Snapshot lines (no props)
+        run: python nfl_fetch_odds.py --lines-only
+
+      # --snapshot-only writes the Line Log (what closing-line capture reads to
+      # find "the last snapshot strictly before kickoff") and captures closing
+      # lines for anything that kicked off since the last run — and skips the
+      # projection engine entirely. A full run here would re-download a season
+      # of play-by-play on every one of Sunday's ~18 firings, and would freeze
+      # new Bet History entry lines at arbitrary mid-afternoon moments instead
+      # of at the morning read. Measured: ~9s vs minutes.
+      - name: Log lines + capture closing/CLV
+        run: python nfl_analyze_edges.py --snapshot-only

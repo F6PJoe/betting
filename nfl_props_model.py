@@ -401,6 +401,207 @@ def project_player_props(baseline: dict, opponent: str, proj_team_score: float,
     return out
 
 
+# ── Prop edge analysis ────────────────────────────────────────────────────────
+# Game-to-game standard deviation as a linear function of a player's mean:
+#     sd = slope * mean + intercept
+# FITTED FROM REAL DATA 2026-08-30 — nflverse player game logs, 2019-2024 REG,
+# players with 8+ games in a season. Fits are strong (r = 0.76 to 0.90 across
+# 5,400+ player-seasons), so this is measured, not assumed.
+#
+# This is what lets a projection become a PROBABILITY instead of a raw point
+# gap: "12 yards above the line" means something completely different for a
+# 250-yard passing prop (sd ~79) than a 4-reception prop (sd ~2.1). Converting
+# both to P(over) puts every prop type on one comparable scale.
+SD_MODEL = {
+    "pass_yds":   (0.2516, 16.004),
+    "pass_tds":   (0.4149, 0.436),
+    "rush_yds":   (0.4940, 5.293),
+    "rec_yds":    (0.4682, 8.210),
+    "receptions": (0.3559, 0.693),
+}
+
+# Anytime-TD overround, MEASURED 2026-08-30 rather than assumed:
+#   book implied-probability sum per game (median, 13 game/book combos) = 4.571
+#   actual distinct offensive TD scorers per game (2025, 283 games)     = 4.131
+#   => overround = 1.107
+# Anytime TD is NOT a mutually exclusive market — several players score in a
+# game — so the usual "divide by the sum" de-vig does not apply. Books also
+# only post the "Yes" side, so there is no two-way price to de-vig against.
+# A flat proportional divisor is the defensible middle ground.
+# CAVEAT: assumes vig is spread proportionally, which understates the juice on
+# longshots (favourite-longshot bias). Re-measure once a few weeks of closing
+# ATD prices exist.
+ANYTIME_TD_OVERROUND = 1.107
+
+# Prop unit scale, in PERCENTAGE POINTS of win probability — same currency as
+# the moneyline scale so the star ratings mean the same thing across bet types.
+# Slightly tighter at the top than ML because prop markets are softer and throw
+# off bigger nominal edges; a 20-point "edge" on a prop is far more likely to be
+# a modelling error than a real one. Year-1 estimate, recalibrate with results.
+PROP_SCALE = [
+    (4.0, 0.3), (5.5, 0.4), (7.0, 0.5), (8.5, 0.6),
+    (10.0, 0.7), (11.5, 0.8), (13.0, 0.9), (15.0, 1.0),
+]
+
+# ── Prop TRACKING gate (separate from the fetch gate) ────────────────────────
+# Prop odds are still FETCHED and still analysed — we need them on the board to
+# re-derive the divisors — but qualifying props are NOT written to Bet History
+# while this is False.
+#
+# WHY: EXPECTED_GAMES_PLAYED is known to be mis-levelled (see the block above).
+# Bet History FREEZES the first qualifying entry, so any prop written now would
+# lock a biased line in as the Primary — the row that grades and that the W/L
+# record counts. That would permanently poison Week 1's prop calibration, and
+# with only ~18 weeks in a season that is an expensive week to waste.
+#
+# FLIP TO TRUE once the per-stat divisors are re-derived against all 16 games'
+# full prop menus (owner agreed 2026-08-30 to do that a few days out, before
+# Week 1 — not to wait for in-season data, which does NOT fix a level bias).
+PROPS_TRACKING_ENABLED = False
+
+# Odds API market key -> our internal prop key
+MARKET_TO_PROP = {
+    "player_pass_yds": "pass_yds",
+    "player_pass_tds": "pass_tds",
+    "player_rush_yds": "rush_yds",
+    "player_reception_yds": "rec_yds",
+    "player_receptions": "receptions",
+    "player_anytime_td": "anytime_td",
+}
+
+PROP_LABEL = {
+    "pass_yds": "Pass Yds", "pass_tds": "Pass TDs", "rush_yds": "Rush Yds",
+    "rec_yds": "Rec Yds", "receptions": "Receptions", "anytime_td": "Anytime TD",
+}
+
+
+def prop_sd(prop: str, mu: float) -> float | None:
+    spec = SD_MODEL.get(prop)
+    if not spec or mu is None:
+        return None
+    slope, inter = spec
+    return max(0.5, slope * mu + inter)
+
+
+def _is_team_entry(name: str) -> bool:
+    """Book lists team defenses in the anytime-TD market; we don't model those."""
+    n = str(name)
+    return "D/ST" in n or n.endswith(" Defense")
+
+
+def analyze_player_props(prop_rows: list[dict], projections: list[dict]) -> tuple[list, list]:
+    """
+    Compare book prop lines against our projections.
+
+    Returns (bet_candidates, diagnostics_rows).
+
+    Method, uniform across prop types: turn our projection into P(outcome),
+    turn the book's price into a vig-free probability, and take the difference
+    in percentage points. That keeps a 12-yard edge on a passing prop and a
+    0.4-reception edge on a receptions prop on the same comparable scale.
+    """
+    by_pid = {}
+    for p in projections:
+        if p.get("player_id"):
+            by_pid[p["player_id"]] = p
+
+    name_map = props_data.build_name_to_id()
+    name_map.pop("_ambiguous", None)
+
+    # (game_id, prop, player, line) -> {direction: {book: price}}
+    grouped = {}
+    meta = {}
+    for r in prop_rows:
+        prop = MARKET_TO_PROP.get(str(r.get("market_key")))
+        if not prop:
+            continue
+        player = str(r.get("player", "")).strip()
+        if not player or _is_team_entry(player):
+            continue
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            continue
+        line = r.get("point")
+        line = None if line in ("", None) else float(line)
+        key = (str(r.get("game_id")), prop, player, line)
+        grouped.setdefault(key, {}).setdefault(str(r.get("direction", "")), {})[
+            str(r.get("sportsbook"))] = price
+        meta[key] = r
+
+    candidates, diagnostics = [], []
+    unmatched = set()
+
+    for (game_id, prop, player, line), sides in grouped.items():
+        pid = props_data.resolve_player_id(player, name_map)
+        proj = by_pid.get(pid) if pid else None
+        if not proj or prop not in proj.get("props", {}):
+            unmatched.add(player)
+            continue
+
+        pdata = proj["props"][prop]
+        mu = pdata["projection"]
+        row = meta[(game_id, prop, player, line)]
+        game_label = proj.get("game", "")
+
+        offers = []   # (direction, our_p, fair_p, price, book)
+
+        if prop == "anytime_td":
+            # mu IS already a probability here (Poisson P(>=1 TD)).
+            for book, price in sides.get("Yes", {}).items():
+                fair = edges.american_to_implied(price) / ANYTIME_TD_OVERROUND
+                offers.append(("Yes", mu, fair, price, book))
+        else:
+            if line is None:
+                continue
+            sd = prop_sd(prop, mu)
+            if sd is None:
+                continue
+            p_over = 1 - edges.normal_cdf(line, mean=mu, sd=sd)
+            for book in set(sides.get("Over", {})) | set(sides.get("Under", {})):
+                po, pu = sides.get("Over", {}).get(book), sides.get("Under", {}).get(book)
+                if po is None or pu is None:
+                    continue   # need both sides at the same book to remove vig
+                io_, iu = edges.american_to_implied(po), edges.american_to_implied(pu)
+                tot = io_ + iu
+                offers.append(("Over", p_over, io_ / tot, po, book))
+                offers.append(("Under", 1 - p_over, iu / tot, pu, book))
+
+        if not offers:
+            continue
+
+        best = max(offers, key=lambda o: (o[1] - o[2]))
+        direction, our_p, fair_p, price, book = best
+        edge_pp = (our_p - fair_p) * 100
+
+        diagnostics.append({
+            "game_id": game_id, "game": game_label, "player": player, "prop": prop,
+            "line": line, "projection": mu, "our_p": round(our_p * 100, 2),
+            "fair_p": round(fair_p * 100, 2), "edge_pp": round(edge_pp, 2),
+        })
+
+        if edge_pp < PROP_SCALE[0][0]:
+            continue
+        units = edges.unit_scale(edge_pp, PROP_SCALE)
+        stars = edges.stars_from_units(units)
+
+        side = f"{player} {direction}" if direction != "Yes" else player
+        candidates.append({
+            "game_id": game_id, "game": game_label,
+            "kickoff_et": "", "kickoff_utc": proj.get("commence_time", ""),
+            "bet_type": PROP_LABEL[prop], "side": side,
+            "bet_on": (f"{player} {direction} {line:g}" if line is not None
+                       else f"{player} Anytime TD"),
+            "line": line, "price": price, "book": book,
+            "stars": stars, "units": units,
+            "projection": round(mu, 3) if prop != "anytime_td" else round(mu * 100, 2),
+            "edge": round(edge_pp, 2), "edge_pct": round(edge_pp, 2),
+            "consensus_line": line, "books_at_line": len(sides.get(direction, {})),
+        })
+
+    return candidates, {"diagnostics": diagnostics, "unmatched": sorted(unmatched)}
+
+
 # ── Slate driver ──────────────────────────────────────────────────────────────
 def project_slate(gc, games_by_id: dict, team_stats: dict, rest_lookup: dict,
                   weather_by_game: dict, season: int = 2025) -> tuple[list, dict]:

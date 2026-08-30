@@ -33,6 +33,16 @@ SCOPES = [
 
 force = "--force" in sys.argv
 
+# Lightweight mode for game-day CLV snapshots. Writes the Line Log and captures
+# closing lines, and does NOTHING else: no team ratings, no projections, no
+# nflverse play-by-play pull, no Edges rewrite, no Bet History upsert.
+#
+# Without this a Sunday's ~18 snapshots would each re-download a season of
+# play-by-play and re-run the whole projection engine purely to append a few
+# line quotes — slow, and it would also freeze new Bet History entry lines at
+# arbitrary mid-afternoon moments rather than at the morning read.
+snapshot_only = "--snapshot-only" in sys.argv
+
 
 # ── Google Sheets helpers ──────────────────────────────────────────────────────
 def get_client():
@@ -740,6 +750,7 @@ def analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
             "_game_id": game_id, "_stars_n": stars,
             "_side": direction, "_line": line,
             "_kickoff_et": _fmt_time_et(g["commence_time"]),
+            "_kickoff_utc": g.get("commence_time", ""),
         }
         gt_rows.append(row_from_header(GT_SHADOW_HEADER, d))
         edge_dicts.append(d)
@@ -822,6 +833,7 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
                     "_game_id": game_id, "_stars_n": stars,
                     "_side": bet_team, "_line": None,
                     "_kickoff_et": time_et,
+                    "_kickoff_utc": g.get("commence_time", ""),
                 }
                 rows.append(row_from_header(SHADOW_HEADER, d))
                 edge_dicts.append(d)
@@ -875,6 +887,7 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
                     "_game_id": game_id, "_stars_n": stars,
                     "_side": bet_team, "_line": bet_point,
                     "_kickoff_et": time_et,
+                    "_kickoff_utc": g.get("commence_time", ""),
                 }
                 rows.append(row_from_header(SHADOW_HEADER, d))
                 edge_dicts.append(d)
@@ -950,6 +963,7 @@ def analyze_team_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
                 "_game_id": game_id, "_stars_n": stars,
                 "_side": f"{team_name} {direction}", "_line": line,
                 "_kickoff_et": _fmt_time_et(g["commence_time"]),
+            "_kickoff_utc": g.get("commence_time", ""),
             }
             rows.append(row_from_header(TEAM_TOTAL_HEADER, d))
             edge_dicts.append(d)
@@ -972,6 +986,7 @@ def to_tracking_candidates(all_edge_dicts: list[dict]) -> list[dict]:
             "game_id":    d.get("_game_id", ""),
             "game":       d.get("Game", ""),
             "kickoff_et": d.get("_kickoff_et", d.get("Time (ET)", "")),
+            "kickoff_utc": d.get("_kickoff_utc", ""),
             "bet_type":   d.get("Bet Type", ""),
             "side":       d.get("_side", ""),
             "bet_on":     d.get("Bet On", ""),
@@ -1188,6 +1203,20 @@ def main():
     odds_rows = sheet_to_dicts(odds_ws)
     print(f"  {len(odds_rows)} odds rows loaded")
 
+    if snapshot_only:
+        # CLV snapshot path — see the `snapshot_only` comment at the top.
+        rest_lookup = build_rest_lookup()
+        games_by_id = group_odds_by_game(odds_rows)
+        games_by_id, dropped = filter_to_scheduled_games(games_by_id, rest_lookup)
+        print(f"  {len(games_by_id)} regular-season game(s)")
+        cap = tracking.capture_closing_and_clv(gc)
+        print(f"Closing/CLV: {cap['captured']} captured, {cap['pending']} awaiting kickoff"
+              + (f", {cap['no_snapshot']} with NO pre-kickoff snapshot" if cap['no_snapshot'] else ""))
+        n_lines = tracking.append_line_log(gc, games_by_id)
+        print(f"Line Log: appended {n_lines} line quote(s)")
+        print("\nDone (snapshot-only).")
+        return
+
     print("\nLoading organic projections sheet ...")
     try:
         organic = load_organic_projections(gc)
@@ -1231,6 +1260,14 @@ def main():
     print(f"  {len(ml_spread_rows)} ML/Spread shadow rows")
     print(f"  {len(tt_rows)} team total rows")
 
+    # ── Capture closing lines for anything that has kicked off since last run.
+    # Runs first so a game that started overnight is captured before anything
+    # else touches Bet History. Backfills by design — see the function docstring.
+    cap = tracking.capture_closing_and_clv(gc)
+    print(f"Closing/CLV: {cap['captured']} captured, {cap['pending']} awaiting kickoff"
+          + (f", {cap['backfilled']} kickoff backfilled" if cap.get('backfilled') else "")
+          + (f", {cap['no_snapshot']} with NO pre-kickoff snapshot" if cap['no_snapshot'] else ""))
+
     # ── Edges tab: the LIVE view, cleared and rewritten every run ────────────
     write_edges_tab(gc, edge_rows)
 
@@ -1240,6 +1277,29 @@ def main():
     stats = tracking.upsert_bet_history(gc, candidates)
     print(f"Bet History: {stats['added']} new bet(s), {stats['updated']} updated, "
           f"{stats['total']} tracked total")
+
+    # ── Player props (gate is in nfl_fetch_odds.FETCH_PLAYER_PROPS) ─────────
+    prop_rows = [r for r in odds_rows if str(r.get("market_key", "")).startswith("player_")]
+    if prop_rows:
+        import nfl_props_model as props_model
+        print("")
+        print(f"Player props: {len(prop_rows)} quote(s) on the board")
+        projections, pdiag = props_model.project_slate(
+            gc, games_by_id, team_stats, rest_lookup, weather_by_game)
+        prop_cands, pmeta = props_model.analyze_player_props(prop_rows, projections)
+        print(f"  {pdiag['players_projected']} player-game projections | "
+              f"{len(pmeta['diagnostics'])} market(s) priced | "
+              f"{len(prop_cands)} edge(s) qualifying")
+        if pmeta["unmatched"]:
+            print(f"  [check] {len(pmeta['unmatched'])} book player(s) with no projection: "
+                  + ", ".join(pmeta["unmatched"][:5])
+                  + (" ..." if len(pmeta["unmatched"]) > 5 else ""))
+        if props_model.PROPS_TRACKING_ENABLED:
+            pstats = tracking.upsert_bet_history(gc, prop_cands)
+            print(f"  Bet History (props): {pstats['added']} new, {pstats['updated']} updated")
+        else:
+            print("  Bet History (props): SKIPPED — prop tracking gated pending "
+                  "per-stat divisor recalibration (see PROPS_TRACKING_ENABLED)")
 
     # ── Line Log: every distinct line on the market, all games, every run ────
     n_lines = tracking.append_line_log(gc, games_by_id)

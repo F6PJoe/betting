@@ -59,7 +59,8 @@ BET_HISTORY_HEADER = [
     # identity / grouping
     "Bet Key", "Opinion Group", "Is Primary",
     # when and what
-    "Entry Date", "Entry Run", "Game", "Kickoff (ET)", "Bet Type", "Side", "Bet On",
+    "Entry Date", "Entry Run", "Game", "Kickoff (ET)", "Kickoff UTC",
+    "Bet Type", "Side", "Bet On",
     # FROZEN at first qualification — never rewritten
     "Entry Line", "Entry Consensus", "Books At Line",
     "Entry Price", "Entry Book", "Entry Stars", "Entry Units",
@@ -75,7 +76,7 @@ BET_HISTORY_HEADER = [
 ]
 
 LINE_LOG_HEADER = [
-    "Snapshot", "Game ID", "Game", "Kickoff (ET)",
+    "Snapshot", "Game ID", "Game", "Kickoff (ET)", "Kickoff UTC",
     "Bet Type", "Side", "Line", "Best Price", "Best Book", "Books",
 ]
 
@@ -189,12 +190,33 @@ def _tab(gc, name: str, header: list[str]):
     column names. Hit exactly this on Line Log and Projection Log in testing.
     """
     w = edges.ws(gc, edges.NFL_SHEET_ID, name, header=header)
-    first = w.row_values(1)
-    if not first or first[:len(header)] != header:
-        if not first:
-            w.update([header], value_input_option="RAW")
-        else:
-            w.insert_rows([header], row=1, value_input_option="RAW")
+    values = w.get_all_values(
+        value_render_option=gspread.utils.ValueRenderOption.unformatted)
+
+    if not values or not any(any(str(c).strip() for c in r) for r in values):
+        w.update([header], value_input_option="RAW")       # bare tab
+        return w
+
+    stored = [str(c) for c in values[0]]
+    if stored[:len(header)] == header:
+        return w                                            # already correct
+
+    # Header differs => schema changed. MIGRATE by column NAME and rewrite the
+    # tab. Do NOT insert the new header above the old one: that shoves the old
+    # header down into row 1 as a data row (hit exactly this — a "Bet Key"
+    # row appeared in Bet History), and appending against a stale header
+    # misaligns every field.
+    old_ix = {h: i for i, h in enumerate(stored)}
+    migrated = []
+    for r in values[1:]:
+        r = [str(c) for c in r] + [""] * (len(stored) - len(r))
+        if r and r[0] in ("Bet Key", "Snapshot", "Date"):
+            continue                                        # stray header row
+        migrated.append([r[old_ix[h]] if h in old_ix else "" for h in header])
+    added = [h for h in header if h not in old_ix]
+    print(f"  [{name}] schema migrated: +{added or 'none'} ({len(migrated)} rows remapped)")
+    w.clear()
+    w.update([header] + migrated, value_input_option="RAW")
     return w
 
 
@@ -253,6 +275,21 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
     if not existing or not existing[0] or existing[0][0] != "Bet Key":
         header = BET_HISTORY_HEADER
         rows = []
+    elif existing[0] != BET_HISTORY_HEADER:
+        # SCHEMA MIGRATION. Remap by COLUMN NAME, never by position — the
+        # schema will keep evolving across the season, and blindly padding
+        # rows to a new width silently shifts every value right of the
+        # inserted column into the wrong field.
+        old = existing[0]
+        old_ix = {h: i for i, h in enumerate(old)}
+        header = BET_HISTORY_HEADER
+        rows = []
+        for r in existing[1:]:
+            r = list(r) + [""] * (len(old) - len(r))
+            rows.append([r[old_ix[h]] if h in old_ix else "" for h in header])
+        added = [h for h in header if h not in old_ix]
+        dropped = [h for h in old if h not in header]
+        print(f"  Bet History schema migrated: +{added or 'none'} -{dropped or 'none'}")
     else:
         header = existing[0]
         rows = [list(r) + [""] * (len(header) - len(r)) for r in existing[1:]]
@@ -287,6 +324,14 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
             r[ix["Current Line"]] = _num(c.get("line"), "")
             r[ix["Current Price"]] = _num(c.get("price"), "")
             r[ix["Current Stars"]] = c.get("stars", "")
+            # Backfill fields added by a later schema change. A migration
+            # creates them EMPTY, and entry fields are frozen so nothing else
+            # would ever populate them — leaving Kickoff UTC blank forever,
+            # which silently makes the row uncapturable for CLV.
+            for col, val in (("Kickoff UTC", c.get("kickoff_utc", "")),
+                             ("Kickoff (ET)", c.get("kickoff_et", ""))):
+                if col in ix and not str(r[ix[col]]).strip() and val:
+                    r[ix[col]] = val
             updated += 1
             continue
 
@@ -305,6 +350,7 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
         put("Entry Run", run_at)
         put("Game", c.get("game", ""))
         put("Kickoff (ET)", c.get("kickoff_et", ""))
+        put("Kickoff UTC", c.get("kickoff_utc", ""))
         put("Bet Type", c["bet_type"])
         put("Side", c["side"])
         put("Bet On", c.get("bet_on", ""))
@@ -360,8 +406,11 @@ def append_line_log(gc, games_by_id: dict, tracked_keys: set | None = None) -> i
     filtering here is what left three of MLB's four bet types with no CLV at all.
     """
     ws = _tab(gc, LINE_LOG_TAB, LINE_LOG_HEADER)
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # ISO UTC, not local — closing-line capture compares this against a
+    # kickoff timestamp, and a naive local stamp cannot be compared safely to a
+    # UTC kickoff (an 8:20pm ET Wednesday game is 00:20 UTC Thursday).
     now_utc = datetime.now(timezone.utc)
+    stamp = now_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     out = []
     for game_id, g in games_by_id.items():
@@ -374,13 +423,14 @@ def append_line_log(gc, games_by_id: dict, tracked_keys: set | None = None) -> i
 
         label = f"{g['away_team']} @ {g['home_team']}"
         kick_et = edges._fmt_time_et(g.get("commence_time", ""))
+        kick_utc = str(g.get("commence_time", ""))
 
         def emit(bet_type, side, line, quotes):
             """quotes: {book: price} at this exact line."""
             if not quotes:
                 return
             best_book, best_price = max(quotes.items(), key=lambda kv: kv[1])
-            out.append([stamp, game_id, label, kick_et, bet_type, side,
+            out.append([stamp, game_id, label, kick_et, kick_utc, bet_type, side,
                         _fmt_line(line), best_price, best_book, len(quotes)])
 
         # Totals — group books by the exact line they offer
@@ -431,6 +481,148 @@ def append_line_log(gc, games_by_id: dict, tracked_keys: set | None = None) -> i
         # source. Same failure Bet History hit; fixed there, missed here.
         ws.append_rows(out, value_input_option="RAW")
     return len(out)
+
+
+# ── Closing line capture + CLV ────────────────────────────────────────────────
+def _parse_utc(v):
+    """
+    Parse a timestamp and ALWAYS return a timezone-aware UTC datetime.
+
+    Older Line Log rows were written as naive local strings ("2026-08-13 16:54")
+    before the switch to ISO UTC. Comparing a naive datetime against an aware
+    kickoff raises TypeError — which would crash closing-line capture mid-season
+    on exactly the historical rows we most need. Naive values are assumed UTC.
+    """
+    try:
+        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def capture_closing_and_clv(gc) -> dict:
+    """
+    Fill Closing Line / Closing Price / CLV for any tracked bet whose game has
+    kicked off and which hasn't been captured yet.
+
+    THE CLOSING LINE IS THE LAST SNAPSHOT STRICTLY BEFORE KICKOFF. For NFL that
+    matters more than in MLB: inactive lists drop at T-90 and move lines
+    materially — a QB scratch is worth points, not cents — so the number worth
+    measuring against is the one AFTER that news. Snapshot density before
+    kickoff is what makes this accurate; this function just takes the latest
+    one available.
+
+    Idempotent and backfilling by design: it re-scans every uncaptured row on
+    every run, so a game missed once (API hiccup, late run, crash) is picked up
+    later instead of being lost forever. That one-shot assumption is what left
+    1,033 MLB rows permanently ungraded.
+    """
+    bh = _tab(gc, BET_HISTORY_TAB, BET_HISTORY_HEADER)
+    existing = bh.get_all_values(
+        value_render_option=gspread.utils.ValueRenderOption.unformatted)
+    if len(existing) < 2:
+        return {"captured": 0, "pending": 0, "no_snapshot": 0}
+
+    header = existing[0]
+    ix = {h: i for i, h in enumerate(header)}
+    rows = [list(r) + [""] * (len(header) - len(r)) for r in existing[1:]]
+
+    ll = _tab(gc, LINE_LOG_TAB, LINE_LOG_HEADER)
+    log = ll.get_all_values(
+        value_render_option=gspread.utils.ValueRenderOption.unformatted)
+    log_rows = [dict(zip(log[0], r)) for r in log[1:]] if len(log) > 1 else []
+
+    # (game_id, bet_type, side) -> [(snapshot_dt, line, price, books)]
+    quotes = {}
+    for q in log_rows:
+        dt = _parse_utc(q.get("Snapshot"))
+        if dt is None:
+            continue
+        key = (str(q.get("Game ID")), str(q.get("Bet Type")), str(q.get("Side")))
+        quotes.setdefault(key, []).append(
+            (dt, _num(q.get("Line")), _num(q.get("Best Price")), _num(q.get("Books"), 1) or 1))
+
+    # game_id -> kickoff, straight from the Line Log, which records every game
+    # every run regardless of whether anything qualified.
+    kickoff_by_game = {}
+    for q in log_rows:
+        k = _parse_utc(q.get("Kickoff UTC"))
+        if k:
+            kickoff_by_game.setdefault(str(q.get("Game ID")), k)
+
+    now = datetime.now(timezone.utc)
+    captured = pending = no_snapshot = backfilled = 0
+
+    for r in rows:
+        if str(r[ix["Closing Captured"]]).strip():
+            continue
+        game_id = str(r[ix["Bet Key"]]).split("|")[0]
+
+        # Self-heal a missing kickoff. The upsert only backfills rows that
+        # RE-QUALIFY, so a bet whose edge faded keeps a blank Kickoff UTC and
+        # would never be capturable — and a faded bet is exactly the row whose
+        # CLV is most informative. Same shape as MLB CLV bug #2 (filtering
+        # before recording); the Line Log is filter-free, so use it.
+        if not str(r[ix["Kickoff UTC"]]).strip() and game_id in kickoff_by_game:
+            r[ix["Kickoff UTC"]] = kickoff_by_game[game_id].strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            backfilled += 1
+
+        kickoff = _parse_utc(r[ix["Kickoff UTC"]])
+        if kickoff is None or kickoff > now:
+            pending += 1
+            continue
+
+        key = (game_id, str(r[ix["Bet Type"]]), str(r[ix["Side"]]))
+        pre = [q for q in quotes.get(key, []) if q[0] < kickoff]
+        if not pre:
+            no_snapshot += 1
+            continue
+
+        last_ts = max(q[0] for q in pre)
+        at_close = [q for q in pre if q[0] == last_ts]
+
+        bet_type = str(r[ix["Bet Type"]])
+        entry_line = _num(r[ix["Entry Line"]])
+        entry_price = _num(r[ix["Entry Price"]])
+
+        # Closing LINE is a books-weighted consensus. Unlike an ENTRY line it
+        # is a reference point, not something we bet, so an average is fine —
+        # it is the market's centre of gravity at the close.
+        closing_line = None
+        if bet_type != "Moneyline":
+            num = sum(q[1] * q[3] for q in at_close if q[1] is not None)
+            den = sum(q[3] for q in at_close if q[1] is not None)
+            if den:
+                closing_line = round(num / den, 2)
+
+        # Closing PRICE must be like-for-like: the price at OUR line. If no book
+        # still offers that number, price CLV is not comparable and the line
+        # movement carries the signal instead.
+        if bet_type == "Moneyline":
+            closing_price = max((q[2] for q in at_close if q[2] is not None), default=None)
+        else:
+            same = [q[2] for q in at_close
+                    if q[1] is not None and entry_line is not None
+                    and abs(q[1] - entry_line) < 1e-9 and q[2] is not None]
+            closing_price = max(same) if same else None
+
+        r[ix["Closing Line"]] = closing_line if closing_line is not None else ""
+        r[ix["Closing Price"]] = closing_price if closing_price is not None else ""
+        r[ix["Closing Captured"]] = last_ts.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+        cl = clv_line_points(bet_type, str(r[ix["Side"]]), entry_line, closing_line)
+        cp = clv_price_pct(entry_price, closing_price)
+        r[ix["CLV Line"]] = cl if cl is not None else ""
+        r[ix["CLV Price %"]] = cp if cp is not None else ""
+        captured += 1
+
+    if captured or backfilled:
+        bh.clear()
+        bh.update([header] + rows, value_input_option="RAW")
+        _pin_numeric_formats(bh, header, BET_HISTORY_NUMERIC_COLS)
+
+    return {"captured": captured, "pending": pending,
+            "no_snapshot": no_snapshot, "backfilled": backfilled}
 
 
 # ── Projection log ────────────────────────────────────────────────────────────

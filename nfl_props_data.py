@@ -76,6 +76,10 @@ NAME_ALIASES = {
     "chigozieokonkwo":  "chigoziemokonkwo",
     "gabedavis":        "gabrieldavis",
     "tankbigsby":       "takeviousbigsby",
+    # Book uses the full legal name, roster uses the nickname (found 2026-08-30
+    # when Odds API offered an anytime-TD prop on "Joshua Palmer" while the
+    # nflverse roster lists "Josh Palmer", BUF WR).
+    "joshuapalmer":     "joshpalmer",
 }
 
 

@@ -1,0 +1,77 @@
+name: NFL Morning Routine
+
+# Runs EVERY DAY, not just game days. NFL games sit on the board all week and
+# the lines move the whole time, so the board needs refreshing daily even when
+# nobody plays until Sunday.
+#
+# This is the PRODUCT run — it grades, refreshes the board, and publishes the
+# analysis. The separate nfl_line_snapshots workflow is INSTRUMENTATION and
+# only captures closing lines. Do not conflate them.
+
+on:
+  schedule:
+    - cron: '0 12 * * *'   # 8:00 AM EDT / 7:00 AM EST (GitHub cron is UTC)
+  workflow_dispatch:        # manual trigger
+
+env:
+  TZ: America/New_York     # so datetime.now() in Python returns Eastern
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25    # longer than MLB: nflverse pulls a season of play-by-play
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # NFL needs more than the MLB stack: nfl_data_py + fastparquet for the
+      # nflverse feeds, pdfplumber for the weekly WR-CB matchup PDF.
+      # Pinned to 3.11 rather than the local 3.14 on purpose — nfl_data_py
+      # declares numpy<2 / pandas<2, which resolves cleanly on 3.11 but has no
+      # wheels for 3.14 (locally it only works via --no-deps).
+      - name: Install dependencies
+        run: pip install gspread google-auth requests python-dotenv tzdata
+                          nfl_data_py pandas appdirs fastparquet pdfplumber
+
+      - name: Write Google credentials
+        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google_credentials.json
+
+      - name: Create .env file
+        run: echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
+
+      # Grading runs FIRST and backfills — it grades every ungraded row that has
+      # a final score, however old, so a game missed by an earlier failed run is
+      # picked up here rather than staying ungraded forever.
+      - name: Grade bets + capture closing lines
+        run: python nfl_grade_bets.py
+
+      - name: Pause
+        run: sleep 30
+
+      # Full fetch INCLUDING player props (~149 credits). Only this run carries
+      # props; the snapshot workflow uses --lines-only.
+      - name: Fetch odds for the upcoming week
+        run: python nfl_fetch_odds.py
+
+      - name: Pause
+        run: sleep 30
+
+      - name: Analyze edges
+        run: python nfl_analyze_edges.py
+
+      # Last, and never allowed to fail the run: the picks are already written by
+      # this point, and a finding inside the audit must not mask a successful
+      # morning. if:always() so it STILL runs when an earlier step crashed —
+      # that is exactly when the report is wanted. The owner cannot read Actions
+      # logs, so this writing a 'Pipeline Health' tab is the only alarm they see;
+      # a stale timestamp there is itself the signal that the run never finished.
+      - name: Pipeline audit (writes Pipeline Health tab)
+        if: always()
+        continue-on-error: true
+        run: python nfl_pipeline_audit.py
