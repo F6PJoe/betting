@@ -1127,6 +1127,7 @@ def main():
     odds_rows = sheet_to_dicts(odds_ws)
     print(f"  {len(odds_rows)} odds rows loaded")
     prop_rows = [r for r in odds_rows if str(r.get("market_key", "")).startswith("player_")]
+    prop_edge_rows = []
 
     if snapshot_only:
         # CLV snapshot path — see the `snapshot_only` comment at the top.
@@ -1192,8 +1193,6 @@ def main():
           + (f", {cap['backfilled']} kickoff backfilled" if cap.get('backfilled') else "")
           + (f", {cap['no_snapshot']} with NO pre-kickoff snapshot" if cap['no_snapshot'] else ""))
 
-    # ── Edges tab: the LIVE view, cleared and rewritten every run ────────────
-    write_edges_tab(gc, edge_rows)
 
     # ── Bet History: permanent, keyed game+type+side+line, upserted ──────────
     all_edges = gt_edges + ml_edges + tt_edges
@@ -1229,10 +1228,27 @@ def main():
             "projection": x["projection"], "consensus_line": x["line"],
             "edge": x["edge_pp"], "edge_pct": x["edge_pp"],
             "stars": "", "units": "",
-            "qualified": x["edge_pp"] >= props_model.PROP_SCALE[0][0],
+            "qualified": x["edge_pp"] >= props_model.scale_for(x["prop"])[0][0],
         } for x in pmeta["diagnostics"]]
         n_plog = tracking.append_projection_log(gc, prop_log)
         print(f"  Projection Log (props): appended {n_plog} market(s)")
+
+        # Props belong on the Edges tab too. It is the "what looks good right
+        # now" view, and it was showing only the four game-level types while
+        # props went straight to Bet History — so the live board silently
+        # disagreed with the tracked record.
+        prop_edge_rows = [row_from_header(EDGES_HEADER, {
+            "Game": c["game"], "Time (ET)": c.get("kickoff_et", ""),
+            "Book": c.get("book", ""), "Bet Type": c["bet_type"],
+            "Direction": c["side"].rsplit(" ", 1)[-1] if c["bet_type"] != "Anytime TD" else "Yes",
+            "Bet On": c["bet_on"], "Stars": stars_emoji(c["stars"]), "Units": c["units"],
+            "Book Line": c.get("line", ""), "Book Juice": c.get("price", ""),
+            "Our Projection": c.get("projection", ""),
+            "Edge": c.get("edge", ""), "Edge %": c.get("edge_pct", ""),
+            "Confidence": "High" if c["stars"] == 5 else "Medium" if c["stars"] == 4 else "Standard",
+            "Confidence %": round(c["units"] * 100, 1),
+            "Run at": datetime.now().strftime("%H:%M"),
+        }) for c in prop_cands]
 
         if props_model.PROPS_TRACKING_ENABLED:
             pstats = tracking.upsert_bet_history(gc, prop_cands)
@@ -1240,6 +1256,9 @@ def main():
         else:
             print("  Bet History (props): SKIPPED — prop tracking gated pending "
                   "per-stat divisor recalibration (see PROPS_TRACKING_ENABLED)")
+
+    # ── Edges tab: the LIVE view, cleared and rewritten every run ────────────
+    write_edges_tab(gc, edge_rows + prop_edge_rows)
 
     # ── Line Log: every distinct line on the market, all games, every run ────
     n_lines = tracking.append_line_log(gc, games_by_id, prop_rows=prop_rows or None)

@@ -315,6 +315,28 @@ def main():
     # the Line Log in nfl_bet_tracking.py is what preserves history) ──────────
     print("\nConnecting to Google Sheets ...")
     ws_odds = get_sheet(NFL_SHEET_ID, "NFL Odds", header=NFL_ODDS_HEADER)
+    # --lines-only skips the props FETCH to stay cheap, but the write below
+    # CLEARS the tab — which silently deleted every prop row and left the model
+    # unable to produce a single prop bet until the next morning fetch. Confirmed
+    # live 2026-09-03: a Thursday snapshot cron wiped all 2,811 prop quotes.
+    # Carry the existing prop rows through instead. Their prices are as of the
+    # last full fetch, which is the right trade — slightly stale prop prices
+    # beat no prop coverage at all between morning runs.
+    if lines_only:
+        try:
+            existing = ws_odds.get_all_values()
+            if existing and existing[0] == NFL_ODDS_HEADER:
+                mk = NFL_ODDS_HEADER.index("market_key")
+                carried = [r for r in existing[1:]
+                           if len(r) > mk and str(r[mk]).startswith("player_")]
+                if carried:
+                    prop_rows.extend(carried)
+                    print(f"  Carried {len(carried)} existing prop row(s) through "
+                          f"the lines-only snapshot")
+        except Exception as e:
+            print(f"  [warn] could not carry prop rows through: {e}")
+
+
     ws_odds.clear()
     ws_odds.update([NFL_ODDS_HEADER] + all_rows + prop_rows, value_input_option="USER_ENTERED")
     print(f"  Wrote {len(all_rows)} game rows + {len(prop_rows)} prop rows "

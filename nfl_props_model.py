@@ -478,10 +478,44 @@ ANYTIME_TD_OVERROUND = 1.107
 # Slightly tighter at the top than ML because prop markets are softer and throw
 # off bigger nominal edges; a 20-point "edge" on a prop is far more likely to be
 # a modelling error than a real one. Year-1 estimate, recalibrate with results.
+# RAISED 2026-09-03 from a 4.0pp floor after the owner asked whether ~500
+# tracked bets could possibly be real. It could not:
+#   * at 4pp the model bet 26 props PER GAME — 416/week, ~7,500 a season
+#   * the MEDIAN market disagrees with the book by 5.0pp, so a 4pp floor was
+#     betting BELOW the model's own noise floor: most "edges" were the model
+#     being imprecise, not the book being wrong
+# 15pp is 3x that noise floor and yields ~3 bets/game (50/week, ~900/season),
+# proportionate to the ~38 game-level bets/week.
+#
+# This is a VOLUME-based choice, not a validated one — no prop has been graded
+# yet. The Projection Log records ALL priced markets with their edges every
+# run, so once Week 1-4 results exist the threshold can be re-cut on evidence
+# (which edge buckets actually produced positive CLV and ROI) rather than on
+# judgement. Expect to revisit it.
 PROP_SCALE = [
-    (4.0, 0.3), (5.5, 0.4), (7.0, 0.5), (8.5, 0.6),
-    (10.0, 0.7), (11.5, 0.8), (13.0, 0.9), (15.0, 1.0),
+    (15.0, 0.3), (17.5, 0.4), (20.0, 0.5), (22.0, 0.6),
+    (24.0, 0.7), (26.0, 0.8), (28.0, 0.9), (30.0, 1.0),
 ]
+
+# ANYTIME TD NEEDS ITS OWN SCALE. A single percentage-POINT threshold is not
+# neutral across base rates, and anytime TD sits on a completely different one:
+#     yardage/reception props  median model P ~57%,  median |edge| 5-9pp
+#     anytime TD               median model P ~20.5%, median |edge| 2.3pp
+# A 15pp bar is ~6.5x anytime TD's own noise floor and excluded it ENTIRELY
+# (0 of 256 markets qualified), which would have silently dropped the one
+# market the owner called non-negotiable.
+#
+# 7pp is ~3x its 2.3pp noise floor — the same stringency the 15pp bar applies
+# to the ~57% markets — and yields ~26 bets/week (~1.6/game).
+ANYTIME_TD_SCALE = [
+    (7.0, 0.3), (8.5, 0.4), (10.0, 0.5), (11.5, 0.6),
+    (13.0, 0.7), (14.5, 0.8), (16.0, 0.9), (18.0, 1.0),
+]
+
+
+def scale_for(prop: str):
+    """Anytime TD is graded on its own scale — see ANYTIME_TD_SCALE."""
+    return ANYTIME_TD_SCALE if prop == "anytime_td" else PROP_SCALE
 
 # ── Prop TRACKING gate (separate from the fetch gate) ────────────────────────
 # Prop odds are still FETCHED and still analysed — we need them on the board to
@@ -517,6 +551,33 @@ PROP_LABEL = {
     "pass_yds": "Pass Yds", "pass_tds": "Pass TDs", "rush_yds": "Rush Yds",
     "rec_yds": "Rec Yds", "receptions": "Receptions", "anytime_td": "Anytime TD",
 }
+
+
+# ── Role-mismatch gate ───────────────────────────────────────────────────────
+# If our projection is wildly away from the book's line, we are not disagreeing
+# about a MATCHUP — we are disagreeing about the player's ROLE, and the book is
+# far better informed about that than a season total is.
+#
+# WHY THIS EXISTS (found 2026-09-03): the biggest "edges" in the model were all
+# backups. Kirk Cousins projected 69 pass yards against a 209.5 line (50pp
+# "edge"); Deshaun Watson 111 vs 178.5; George Holani 9.2 vs 20.5. The cause is
+# structural: the consensus sheet gives a backup a SEASON total reflecting a
+# partial role (say 1,000 yards because he is expected to play ~5 games), and
+# dividing by EXPECTED_GAMES_PLAYED assumes he plays 15.5. But a book only
+# posts a prop line for a player it expects to PLAY. So every backup with a
+# posted line manufactured a huge fake Under edge.
+#
+# Raising the star threshold would have made this WORSE, not better — these
+# were the LARGEST edges in the system, so a tighter filter would have kept
+# almost nothing but backups.
+#
+# Band chosen from the model's own mechanics, not from percentile-fitting:
+# MATCHUP_DAMPING (0.5) and SCRIPT_DAMPING (0.7) applied to factors that
+# average ~1.00 cannot move a projection more than roughly +/-20% off baseline.
+# Anything beyond ~+/-35% therefore lives in the BASELINE, i.e. the role.
+# Measured effect: markets inside 0.80-1.25 average 7.0pp disagreement;
+# those below 0.60 average 41.5pp.
+ROLE_MISMATCH_BAND = (0.70, 1.45)
 
 
 def prop_sd(prop: str, mu: float) -> float | None:
@@ -575,6 +636,7 @@ def analyze_player_props(prop_rows: list[dict], projections: list[dict]) -> tupl
 
     candidates, diagnostics = [], []
     unmatched = set()
+    role_mismatch = []
 
     for (game_id, prop, player, line), sides in grouped.items():
         pid = props_data.resolve_player_id(player, name_map)
@@ -592,11 +654,26 @@ def analyze_player_props(prop_rows: list[dict], projections: list[dict]) -> tupl
 
         if prop == "anytime_td":
             # mu IS already a probability here (Poisson P(>=1 TD)).
+            fair_probs = [edges.american_to_implied(px) / ANYTIME_TD_OVERROUND
+                          for px in sides.get("Yes", {}).values()]
+            # Same role gate, on probability rather than a line: a backup with a
+            # posted anytime-TD price fails it for the same reason.
+            if fair_probs and mu > 0:
+                ratio = mu / (sum(fair_probs) / len(fair_probs))
+                if not (ROLE_MISMATCH_BAND[0] <= ratio <= ROLE_MISMATCH_BAND[1]):
+                    role_mismatch.append((player, prop, round(ratio, 2)))
+                    continue
             for book, price in sides.get("Yes", {}).items():
                 fair = edges.american_to_implied(price) / ANYTIME_TD_OVERROUND
                 offers.append(("Yes", mu, fair, price, book))
         else:
             if line is None:
+                continue
+            # ROLE GATE — see ROLE_MISMATCH_BAND. Skip rather than bet: the
+            # disagreement is about whether this player is even starting.
+            ratio = mu / line if line else 1.0
+            if not (ROLE_MISMATCH_BAND[0] <= ratio <= ROLE_MISMATCH_BAND[1]):
+                role_mismatch.append((player, prop, round(ratio, 2)))
                 continue
             sd = prop_sd(prop, mu)
             if sd is None:
@@ -624,9 +701,10 @@ def analyze_player_props(prop_rows: list[dict], projections: list[dict]) -> tupl
             "fair_p": round(fair_p * 100, 2), "edge_pp": round(edge_pp, 2),
         })
 
-        if edge_pp < PROP_SCALE[0][0]:
+        scale = scale_for(prop)
+        if edge_pp < scale[0][0]:
             continue
-        units = edges.unit_scale(edge_pp, PROP_SCALE)
+        units = edges.unit_scale(edge_pp, scale)
         stars = edges.stars_from_units(units)
 
         side = f"{player} {direction}" if direction != "Yes" else player
@@ -643,7 +721,8 @@ def analyze_player_props(prop_rows: list[dict], projections: list[dict]) -> tupl
             "consensus_line": line, "books_at_line": len(sides.get(direction, {})),
         })
 
-    return candidates, {"diagnostics": diagnostics, "unmatched": sorted(unmatched)}
+    return candidates, {"diagnostics": diagnostics, "unmatched": sorted(unmatched),
+                        "role_mismatch": role_mismatch}
 
 
 # ── Slate driver ──────────────────────────────────────────────────────────────
