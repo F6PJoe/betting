@@ -114,8 +114,11 @@ jobs:
         run: echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
 
       # --lines-only skips the per-event prop calls: ~19 credits instead of ~149.
+      # --only-if-kickoff-within 6 exits free when nothing kicks off soon: the
+      # crons are day-of-week based, so without it every Sunday and Monday fires
+      # in bye weeks and the off-season (Sun Sep 6 alone: 18 fires, zero games).
       - name: Snapshot lines (no props)
-        run: python nfl_fetch_odds.py --lines-only
+        run: python nfl_fetch_odds.py --lines-only --only-if-kickoff-within 6
 
       # --snapshot-only writes the Line Log (what closing-line capture reads to
       # find "the last snapshot strictly before kickoff") and captures closing
