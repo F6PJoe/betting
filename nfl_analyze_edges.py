@@ -310,6 +310,64 @@ def _shrink(team_avg: float, league_avg: float, n_games: int, k: float) -> float
     return (n_games * team_avg + k * league_avg) / (n_games + k)
 
 
+# How many passes of the opponent adjustment to run. Each pass re-rates every
+# team against the CURRENT estimate of its opponents, so the ratings settle on
+# a mutually consistent solution. 10 is well past convergence for a 32-team,
+# 17-game schedule (movement is <0.01 pts by pass 6) and costs nothing.
+OPPONENT_ADJUST_PASSES = 10
+
+
+def opponent_adjust(stats: dict, league_avg: float,
+                    passes: int = OPPONENT_ADJUST_PASSES) -> tuple[dict, dict]:
+    """
+    Convert raw points-scored / points-allowed into OPPONENT-ADJUSTED ratings.
+
+    WHY THIS EXISTS: raw points-allowed punishes a team for its schedule. The
+    2025 Jets allowed 27.87 per game against a 23.01 league average, which the
+    additive model read as "bad defense" full stop — but a chunk of that was
+    facing good offenses. Playing a weak Titans offence, they will not allow
+    27.87. Unadjusted, that inflated the projected Titans score to 23.86
+    against their own 18.35 baseline, which became a 1.21 game-script factor,
+    which lifted EVERY Titans player prop by 21% — putting Cam Ward's pass
+    yards 70 above the book's line and NYJ@TEN into the top three plays on the
+    board. One biased team rating contaminated an entire roster.
+
+    Method (standard iterative / SRS-style):
+        adj_off[t] = mean over t's games of (points scored + (opp adj_def - league_avg))
+        adj_def[t] = mean over t's games of (points allowed + (opp adj_off - league_avg))
+
+    Read the sign as: scoring 20 against a defence that normally allows 17 is
+    worth MORE than scoring 20 against one that allows 30. Both series are
+    seeded with the raw rates and refined together until they agree.
+
+    Returns (adj_off, adj_def), still in points-per-game so everything
+    downstream (projections, script factor) is unchanged in units.
+    """
+    teams = list(stats)
+    adj_off = {t: (sum(stats[t]["scored"]) / len(stats[t]["scored"])
+                   if stats[t]["scored"] else league_avg) for t in teams}
+    adj_def = {t: (sum(stats[t]["allowed"]) / len(stats[t]["allowed"])
+                   if stats[t]["allowed"] else league_avg) for t in teams}
+
+    for _ in range(passes):
+        new_off, new_def = {}, {}
+        for t in teams:
+            d = stats[t]
+            if not d["scored"]:
+                new_off[t], new_def[t] = league_avg, league_avg
+                continue
+            off_vals, def_vals = [], []
+            for scored, allowed, opp in zip(d["scored"], d["allowed"], d["opp"]):
+                # credit for the defence faced / debit for the offence faced
+                off_vals.append(scored + (adj_def.get(opp, league_avg) - league_avg))
+                def_vals.append(allowed + (adj_off.get(opp, league_avg) - league_avg))
+            new_off[t] = sum(off_vals) / len(off_vals)
+            new_def[t] = sum(def_vals) / len(def_vals)
+        adj_off, adj_def = new_off, new_def
+
+    return adj_off, adj_def
+
+
 def load_team_stats(prior_season: int = 2025, current_season: int = 2026) -> dict:
     """
     Team offense/defense power ratings, expressed in points per game.
@@ -333,17 +391,20 @@ def load_team_stats(prior_season: int = 2025, current_season: int = 2026) -> dic
     current = sched[(sched["season"] == current_season) & (sched["home_score"].notna())]
 
     def _team_pgstats(df):
-        """Returns {team: (pts_scored_list, pts_allowed_list)}."""
+        """{team: {"scored": [...], "allowed": [...], "opp": [...]}}.
+
+        `opp` is parallel to the score lists so each game can be adjusted for
+        WHO it was played against — see opponent_adjust().
+        """
         out = {}
         for _, g in df.iterrows():
             home, away = g["home_team"], g["away_team"]
             hs, as_ = g["home_score"], g["away_score"]
-            out.setdefault(home, {"scored": [], "allowed": []})
-            out.setdefault(away, {"scored": [], "allowed": []})
-            out[home]["scored"].append(hs)
-            out[home]["allowed"].append(as_)
-            out[away]["scored"].append(as_)
-            out[away]["allowed"].append(hs)
+            for t, own, opp_pts, opp in ((home, hs, as_, away), (away, as_, hs, home)):
+                out.setdefault(t, {"scored": [], "allowed": [], "opp": []})
+                out[t]["scored"].append(own)
+                out[t]["allowed"].append(opp_pts)
+                out[t]["opp"].append(opp)
         return out
 
     prior_stats = _team_pgstats(prior)
@@ -351,20 +412,30 @@ def load_team_stats(prior_season: int = 2025, current_season: int = 2026) -> dic
 
     league_avg_prior = prior["home_score"].mean() * 0.5 + prior["away_score"].mean() * 0.5
 
+    # OPPONENT-ADJUST BEFORE SHRINKING. Order matters: shrinking first would
+    # pull a team toward the mean using a schedule-contaminated number, and the
+    # adjustment would then be working on an already-distorted rate.
+    prior_adj_off, prior_adj_def = opponent_adjust(prior_stats, league_avg_prior)
+    if current_stats:
+        cur_avg = (current["home_score"].mean() * 0.5 + current["away_score"].mean() * 0.5)
+        cur_adj_off, cur_adj_def = opponent_adjust(current_stats, cur_avg)
+    else:
+        cur_adj_off, cur_adj_def = {}, {}
+
     ratings = {}
     for abbr in TEAM_NAME_TO_ABBR.values():
         p = prior_stats.get(abbr, {"scored": [], "allowed": []})
         n_prior = len(p["scored"])
-        prior_off = sum(p["scored"]) / n_prior if n_prior else league_avg_prior
-        prior_def = sum(p["allowed"]) / n_prior if n_prior else league_avg_prior
+        prior_off = prior_adj_off.get(abbr, league_avg_prior)
+        prior_def = prior_adj_def.get(abbr, league_avg_prior)
         prior_off = _shrink(prior_off, league_avg_prior, n_prior, PRIOR_SEASON_SHRINK_K)
         prior_def = _shrink(prior_def, league_avg_prior, n_prior, PRIOR_SEASON_SHRINK_K)
 
         c = current_stats.get(abbr, {"scored": [], "allowed": []})
         n_current = len(c["scored"])
         if n_current:
-            current_off = sum(c["scored"]) / n_current
-            current_def = sum(c["allowed"]) / n_current
+            current_off = cur_adj_off.get(abbr, league_avg_prior)
+            current_def = cur_adj_def.get(abbr, league_avg_prior)
             off_rating = (n_current * current_off + CURRENT_SEASON_PRIOR_WEIGHT * prior_off) / \
                          (n_current + CURRENT_SEASON_PRIOR_WEIGHT)
             def_rating = (n_current * current_def + CURRENT_SEASON_PRIOR_WEIGHT * prior_def) / \
@@ -1264,6 +1335,23 @@ def main():
         # now" view, and it was showing only the four game-level types while
         # props went straight to Bet History — so the live board silently
         # disagreed with the tracked record.
+        # EDGES SHOWS ONE ROW PER OPINION — the best line only.
+        # Bet History still tracks every distinct line separately (that is what
+        # gives each its own CLV), but the board is "what should I bet right
+        # now", and three Cam Ward pass-yard lines is one decision, not three.
+        # Highest edge IS the best line here: for an Over the lowest number
+        # carries the biggest edge and is also easiest to hit, and for an Under
+        # the highest does — so ranking on edge picks the right one either way.
+        best_by_opinion = {}
+        for c in prop_cands:
+            k = (c["game_id"], c["bet_type"], c["side"])
+            if k not in best_by_opinion or c["edge"] > best_by_opinion[k]["edge"]:
+                best_by_opinion[k] = c
+        deduped = list(best_by_opinion.values())
+        if len(deduped) < len(prop_cands):
+            print(f"  Edges board: {len(prop_cands)} tracked prop line(s) -> "
+                  f"{len(deduped)} shown (best line per player/prop)")
+
         prop_edge_rows = [row_from_header(EDGES_HEADER, {
             "Game": c["game"], "Time (ET)": c.get("kickoff_et", ""),
             "Book": c.get("book", ""), "Bet Type": c["bet_type"],
@@ -1275,7 +1363,7 @@ def main():
             "Confidence": "High" if c["stars"] == 5 else "Medium" if c["stars"] == 4 else "Standard",
             "Confidence %": round(c["units"] * 100, 1),
             "Run at": datetime.now().strftime("%H:%M"),
-        }) for c in prop_cands]
+        }) for c in deduped]
 
         if props_model.PROPS_TRACKING_ENABLED:
             pstats = tracking.upsert_bet_history(gc, prop_cands)

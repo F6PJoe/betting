@@ -115,6 +115,24 @@ MATCHUP_DAMPING = 0.50
 # scoring more doesn't lift every player proportionally.
 SCRIPT_DAMPING = 0.70
 
+# Hard bound on the script factor, applied AFTER damping.
+#
+# WHY (2026-09-03): the factor is a RATIO of this game's projected team score
+# to that team's own baseline, so it inflates whenever the two are far apart.
+# Opponent-adjusting the ratings — correctly — made this worse for NYJ@TEN,
+# because it lowered TEN's baseline (18.35 -> 16.55, their scoring had been
+# flattered by weak defences) while their projected score barely moved. The
+# raw ratio went 1.30 -> 1.41, lifting every Titans prop ~29% and putting
+# three Cam Ward lines in the top ten of the board.
+#
+# Damping alone cannot bound a ratio; it only shrinks it proportionally. The
+# honest statement is a claim about football, not arithmetic: no single
+# matchup makes a player's expected output swing more than ~20%. Some of the
+# team-level scoring swing is distribution between players rather than a lift
+# for all of them, which SCRIPT_DAMPING already partly reflects — this caps
+# what is left.
+SCRIPT_FACTOR_CAP = 0.20   # clamp to [0.80, 1.20]
+
 # Anytime TD: converting a projected team score into an expected number of
 # OFFENSIVE touchdowns. A league-average 23-point team scores roughly 2.4 TDs
 # (16.8 pts with XPs) plus ~1.8 FGs (5.4 pts) = ~22.2. So points-per-offensive-
@@ -285,7 +303,8 @@ def script_factor(proj_team_score: float, team_baseline_ppg: float) -> float:
     """
     if not team_baseline_ppg:
         return 1.0
-    return _damped(proj_team_score / team_baseline_ppg, SCRIPT_DAMPING)
+    f = _damped(proj_team_score / team_baseline_ppg, SCRIPT_DAMPING)
+    return max(1 - SCRIPT_FACTOR_CAP, min(1 + SCRIPT_FACTOR_CAP, f))
 
 
 def wr_cb_factor(player_name: str, opponent: str, wr_cb_rows: list) -> tuple[float, str]:
