@@ -53,6 +53,123 @@ def load_final_scores(season: int = 2026) -> dict:
             for _, r in s.iterrows()}
 
 
+# Bet Type -> the actual stat we grade it against
+PROP_STAT = {
+    "Pass Yds": "passing_yards", "Pass TDs": "passing_tds",
+    "Rush Yds": "rushing_yards", "Rec Yds": "receiving_yards",
+    "Receptions": "receptions", "Anytime TD": "any_td",
+}
+PROP_TYPES = set(PROP_STAT)
+
+
+def load_player_game_stats(season: int = 2026) -> tuple[dict, dict]:
+    """
+    Per-player, per-game actuals aggregated from play-by-play, plus the set of
+    (game, player) pairs that actually took an offensive snap.
+
+    Returns ({(nflverse_game_id, player_id): {stat: value}}, played_set).
+
+    Built from PBP rather than the combined player_stats release because that
+    release lags (it only ran through 2024 when checked) and PBP is the source
+    everything else is derived from anyway.
+
+    THE PLAYED SET MATTERS: a prop on a player who is inactive is VOIDED by the
+    book, not lost. But a player who suits up and records nothing is a genuine
+    Under win / anytime-TD loss. PBP alone cannot tell those apart — a WR who
+    played but was never targeted simply has no rows — so snap counts are what
+    separate "didn't play" from "played, did nothing".
+    """
+    import nfl_props_data as props_data
+    try:
+        pbp = props_data._load_pbp(season)
+    except Exception as e:
+        print(f"  [info] no {season} play-by-play yet ({e})")
+        return {}, {}
+
+    stats = {}
+
+    def bump(gid, pid, key, val):
+        if not pid or pid != pid:
+            return
+        stats.setdefault((gid, pid), {}).setdefault(key, 0.0)
+        stats[(gid, pid)][key] += float(val or 0)
+
+    for _, p in pbp.iterrows():
+        gid = p.get("game_id")
+        if p.get("passer_player_id") == p.get("passer_player_id") and p.get("passer_player_id"):
+            bump(gid, p["passer_player_id"], "passing_yards", p.get("passing_yards"))
+            bump(gid, p["passer_player_id"], "passing_tds", p.get("pass_touchdown"))
+        if p.get("rusher_player_id") == p.get("rusher_player_id") and p.get("rusher_player_id"):
+            bump(gid, p["rusher_player_id"], "rushing_yards", p.get("rushing_yards"))
+        if p.get("receiver_player_id") == p.get("receiver_player_id") and p.get("receiver_player_id"):
+            bump(gid, p["receiver_player_id"], "receiving_yards", p.get("receiving_yards"))
+            bump(gid, p["receiver_player_id"], "receptions", p.get("complete_pass"))
+        td_pid = p.get("td_player_id")
+        if td_pid and td_pid == td_pid:
+            bump(gid, td_pid, "any_td", 1)
+
+    played = {}
+    try:
+        snaps = nfl_data.import_snap_counts([season])
+        roster = nfl_data.import_seasonal_rosters([season])
+        pfr_to_gsis = {v: k for k, v in zip(roster["player_id"], roster["pfr_id"]) if v}
+        for _, r in snaps.iterrows():
+            if (r.get("offense_snaps") or 0) > 0:
+                pid = pfr_to_gsis.get(r.get("pfr_player_id"))
+                if pid:
+                    played.setdefault(str(r.get("game_id")), set()).add(pid)
+    except Exception as e:
+        print(f"  [info] snap counts unavailable ({e}) — props will DEFER, not void")
+
+    return stats, played
+
+
+def build_nflverse_game_ids(season: int = 2026) -> dict:
+    """{(home_abbr, away_abbr): nflverse game_id} for completed games."""
+    s = nfl_data.import_schedules([season])
+    s = s[(s["game_type"] == "REG") & s["home_score"].notna()]
+    return {(r["home_team"], r["away_team"]): r["game_id"] for _, r in s.iterrows()}
+
+
+def grade_prop(bet_type: str, side: str, line, nfl_gid: str, player_id: str,
+               stats: dict, played: dict):
+    """
+    Grade one player prop.
+
+    Returns (result, actual). result is Win/Loss/Push/Void, or None meaning
+    DEFER — we genuinely cannot tell yet, so leave the row ungraded and let the
+    lookback pick it up on a later run. Never guess: a wrongly-graded prop is
+    silently wrong forever, whereas a deferred one self-heals.
+    """
+    stat_key = PROP_STAT.get(bet_type)
+    if not stat_key or not player_id:
+        return None, None
+
+    game_played = played.get(nfl_gid)
+    if game_played is None:
+        return None, None                       # snaps not published yet -> defer
+
+    if player_id not in game_played:
+        return "Void", None                     # inactive: books refund the prop
+
+    actual = float(stats.get((nfl_gid, player_id), {}).get(stat_key, 0.0))
+
+    if bet_type == "Anytime TD":
+        return ("Win" if actual >= 1 else "Loss"), actual
+
+    if line is None:
+        return None, None
+    direction = str(side).rsplit(" ", 1)[-1].strip().lower()
+    if abs(actual - line) < 1e-9:
+        return "Push", actual
+    over = actual > line
+    if direction == "over":
+        return ("Win" if over else "Loss"), actual
+    if direction == "under":
+        return ("Loss" if over else "Win"), actual
+    return None, actual
+
+
 def _teams_from_label(label: str):
     """'Away Team @ Home Team' -> (home_abbr, away_abbr)."""
     if " @ " not in str(label):
@@ -133,6 +250,20 @@ def grade_bet_history(gc) -> dict:
     rows = [list(r) + [""] * (len(header) - len(r)) for r in values[1:]]
     scores = load_final_scores()
 
+    # Props need player-level actuals and a name->id map; only pay for them if
+    # there is actually an ungraded prop waiting.
+    ix_bt = ix["Bet Type"]
+    need_props = any(str(r[ix_bt]) in PROP_TYPES and not str(r[ix["Result"]]).strip()
+                     for r in rows)
+    if need_props:
+        import nfl_props_data as props_data
+        pstats, played = load_player_game_stats()
+        nfl_gids = build_nflverse_game_ids()
+        name_map = props_data.build_name_to_id()
+        name_map.pop("_ambiguous", None)
+    else:
+        pstats = played = nfl_gids = name_map = {}
+
     graded = awaiting = unmatched = 0
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -149,11 +280,23 @@ def grade_bet_history(gc) -> dict:
 
         hs, as_ = scores[(home, away)]
         line = tracking._num(r[ix["Entry Line"]])
-        result, actual = grade_one(str(r[ix["Bet Type"]]), str(r[ix["Side"]]),
-                                   line, home, away, hs, as_)
-        if result is None:
-            unmatched += 1
-            continue
+        bet_type = str(r[ix["Bet Type"]])
+        side = str(r[ix["Side"]])
+
+        if bet_type in PROP_TYPES:
+            # Side is "Player Over"/"Player Under", or a bare name for anytime TD
+            player = side.rsplit(" ", 1)[0] if bet_type != "Anytime TD" else side
+            pid = props_data.resolve_player_id(player, name_map) if name_map else None
+            result, actual = grade_prop(bet_type, side, line,
+                                        nfl_gids.get((home, away)), pid, pstats, played)
+            if result is None:
+                awaiting += 1        # defer, don't guess — the lookback retries
+                continue
+        else:
+            result, actual = grade_one(bet_type, side, line, home, away, hs, as_)
+            if result is None:
+                unmatched += 1
+                continue
 
         units = tracking._num(r[ix["Entry Units"]], 0) or 0
         payout = american_payout(r[ix["Entry Price"]])
@@ -162,7 +305,7 @@ def grade_bet_history(gc) -> dict:
         elif result == "Loss":
             units_result = -units
         else:
-            units_result = 0
+            units_result = 0            # Push and Void both return the stake
 
         r[ix["Home Score"]] = hs
         r[ix["Away Score"]] = as_

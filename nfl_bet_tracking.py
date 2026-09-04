@@ -148,16 +148,22 @@ def clv_line_points(bet_type: str, side: str, entry_line, closing_line) -> float
     except (TypeError, ValueError):
         return None
 
+    # Drive off the SIDE, not a hardcoded list of bet types. Every over/under
+    # market behaves identically — game totals, team totals, and all five
+    # over/under player props ("Drake Maye Under") — and listing bet types
+    # meant props silently returned None and got no line CLV at all, which is
+    # precisely the "tracked but never measured" failure this file exists to
+    # prevent.
     s = (side or "").strip().lower()
-    if bet_type in ("Game Total", "Team Total"):
-        if s.endswith("over"):
-            return round(c - e, 2)
-        if s.endswith("under"):
-            return round(e - c, 2)
-        return None
+    if s.endswith("over"):
+        return round(c - e, 2)
+    if s.endswith("under"):
+        return round(e - c, 2)
     if bet_type == "Spread":
         return round(e - c, 2)
-    return None  # Moneyline has no line to move
+    # Moneyline and Anytime TD have no handicap — price movement is the whole
+    # signal for those, carried by clv_price_pct().
+    return None
 
 
 def clv_price_pct(entry_price, closing_price) -> float | None:
@@ -208,11 +214,26 @@ def _tab(gc, name: str, header: list[str]):
     # misaligns every field.
     old_ix = {h: i for i, h in enumerate(stored)}
     migrated = []
+    already_new = 0
     for r in values[1:]:
-        r = [str(c) for c in r] + [""] * (len(stored) - len(r))
+        r = [str(c) for c in r]
         if r and r[0] in ("Bet Key", "Snapshot", "Date"):
             continue                                        # stray header row
+        # A row WIDER than the stored header was already written in the new
+        # shape — appended after the code changed but before this migration
+        # ran. Remapping it by old-header NAME shifts every field past the
+        # inserted column. That corrupted 704 Line Log rows on 2026-08-30
+        # (kickoff timestamps landed in "Bet Type"), so treat width as the
+        # signal and map those positionally against the NEW header instead.
+        if len(r) > len(stored):
+            already_new += 1
+            migrated.append((r + [""] * len(header))[:len(header)])
+            continue
+        r = r + [""] * (len(stored) - len(r))
         migrated.append([r[old_ix[h]] if h in old_ix else "" for h in header])
+    if already_new:
+        print(f"  [{name}] {already_new} row(s) were already in the new shape "
+              f"— mapped positionally, not remapped by name")
     added = [h for h in header if h not in old_ix]
     print(f"  [{name}] schema migrated: +{added or 'none'} ({len(migrated)} rows remapped)")
     w.clear()
@@ -391,7 +412,58 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
 
 
 # ── Line log ──────────────────────────────────────────────────────────────────
-def append_line_log(gc, games_by_id: dict, tracked_keys: set | None = None) -> int:
+def _prop_log_rows(prop_rows: list[dict], games_by_id: dict, stamp: str,
+                   now_utc) -> list[list]:
+    """
+    Line Log rows for player props.
+
+    Sides MUST match exactly what analyze_player_props() writes into Bet
+    History ("Josh Allen Over" for O/U, bare "Josh Allen" for anytime TD),
+    otherwise closing capture looks up a key that does not exist and every
+    prop silently gets no CLV — the same class of failure as MLB's CLV bug #1.
+    """
+    import nfl_props_model as props_model
+
+    by_key = {}
+    for r in prop_rows:
+        prop = props_model.MARKET_TO_PROP.get(str(r.get("market_key")))
+        if not prop:
+            continue
+        player = str(r.get("player", "")).strip()
+        if not player or props_model._is_team_entry(player):
+            continue
+        gid = str(r.get("game_id"))
+        g = games_by_id.get(gid)
+        if not g:
+            continue
+        try:
+            kickoff = datetime.fromisoformat(str(g.get("commence_time", "")).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            kickoff = None
+        if kickoff and kickoff <= now_utc:
+            continue
+        price = _num(r.get("price"))
+        if price is None:
+            continue
+        direction = str(r.get("direction", "")).strip()
+        line = _num(r.get("point"))
+        side = player if direction == "Yes" else f"{player} {direction}"
+        key = (gid, props_model.PROP_LABEL[prop], side, _fmt_line(line))
+        by_key.setdefault(key, {})[str(r.get("sportsbook"))] = price
+
+    out = []
+    for (gid, bet_type, side, line), quotes in by_key.items():
+        g = games_by_id[gid]
+        best_book, best_price = max(quotes.items(), key=lambda kv: kv[1])
+        out.append([stamp, gid, f"{g['away_team']} @ {g['home_team']}",
+                    edges._fmt_time_et(g.get("commence_time", "")),
+                    str(g.get("commence_time", "")),
+                    bet_type, side, line, best_price, best_book, len(quotes)])
+    return out
+
+
+def append_line_log(gc, games_by_id: dict, tracked_keys: set | None = None,
+                    prop_rows: list[dict] | None = None) -> int:
     """
     Append every DISTINCT LINE currently on the market for every not-yet-started
     game, with the best price at that line.
@@ -472,6 +544,9 @@ def append_line_log(gc, games_by_id: dict, tracked_keys: set | None = None) -> i
                     by_line.setdefault(_fmt_line(pt), {})[book] = pr
                 for line, quotes in by_line.items():
                     emit("Team Total", f"{team} {direction.title()}", line, quotes)
+
+    if prop_rows:
+        out.extend(_prop_log_rows(prop_rows, games_by_id, stamp, now_utc))
 
     if out:
         # RAW, not USER_ENTERED — Sheets parses "2026-08-12 11:00" into a

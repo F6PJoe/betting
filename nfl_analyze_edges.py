@@ -185,7 +185,7 @@ PRIOR_SEASON_SHRINK_K = 6
 # season has caught up to the prior, and by season's end (17 games) current-
 # season data dominates (17/25 = 68%). This mirrors how public power-ranking
 # systems fade a preseason prior over the course of a season. Flagged for
-# recalibration via the Calibration Tracker tab once real 2026 results exist.
+# recalibration off the Performance tab once real 2026 results exist.
 CURRENT_SEASON_PRIOR_WEIGHT = 8
 
 # Rest-day adjustments (points added/subtracted from a team's projected
@@ -208,7 +208,7 @@ WIND_MAX_PENALTY     = -3.0   # cap so one extreme reading doesn't dominate
 # (not a 1-2 star tier — just not actionable). Thresholds below are initial
 # estimates based on typical NFL market efficiency (spreads are the sharpest/
 # most efficient market, totals a bit looser, team totals looser still) —
-# recalibrate via Calibration Tracker once ~30+ graded bets per type exist,
+# recalibrate off the Performance tab once ~30+ graded bets per type exist,
 # same as the MLB TOTAL_SCALE recalibration on 2026-06-14.
 GAME_TOTAL_SCALE = [
     (3.0, 0.3), (4.0, 0.4), (5.0, 0.5), (5.5, 0.6),
@@ -678,10 +678,12 @@ def project_game_score(home_abbr, away_abbr, team_stats, rest_lookup, weather_by
 
 # ── Game Totals ────────────────────────────────────────────────────────────────
 def analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
-    """Returns (bet_history_rows, game_totals_shadow_rows, edge_dicts).
-    Bet History gets the 4-star+ subset (mirrors the MLB tracking rule);
-    the Game Totals shadow tab gets every qualifying (3-star+) edge."""
-    history_rows, gt_rows, edge_dicts = [], [], []
+    """Returns edge_dicts — one per qualifying game-total edge.
+
+    Bet History is now a SINGLE table keyed game+type+side+line (see
+    nfl_bet_tracking), so the old per-bet-type shadow tabs and their row
+    builders are gone. Everything downstream consumes the edge dicts."""
+    edge_dicts = []
     today = datetime.now().strftime("%Y-%m-%d")
 
     for game_id, g in games_by_id.items():
@@ -752,20 +754,15 @@ def analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
             "_kickoff_et": _fmt_time_et(g["commence_time"]),
             "_kickoff_utc": g.get("commence_time", ""),
         }
-        gt_rows.append(row_from_header(GT_SHADOW_HEADER, d))
         edge_dicts.append(d)
-        if stars >= 4:
-            history_rows.append(row_from_header(HISTORY_HEADER, d))
 
-    return history_rows, gt_rows, edge_dicts
+    return edge_dicts
 
 
 # ── Moneyline + Spread ─────────────────────────────────────────────────────────
 def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_game):
-    """Returns (ml_spread_shadow_rows, edge_dicts). Shadow-only for Year 1 —
-    same reasoning as the MLB model's ML/RL Shadow tab: no track record yet
-    to justify promoting these to official Bet History."""
-    rows, edge_dicts = [], []
+    """Returns edge_dicts — one per qualifying moneyline or spread edge."""
+    edge_dicts = []
     today = datetime.now().strftime("%Y-%m-%d")
 
     for game_id, g in games_by_id.items():
@@ -835,7 +832,6 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
                     "_kickoff_et": time_et,
                     "_kickoff_utc": g.get("commence_time", ""),
                 }
-                rows.append(row_from_header(SHADOW_HEADER, d))
                 edge_dicts.append(d)
 
         # -- Spread --
@@ -889,17 +885,15 @@ def analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_ga
                     "_kickoff_et": time_et,
                     "_kickoff_utc": g.get("commence_time", ""),
                 }
-                rows.append(row_from_header(SHADOW_HEADER, d))
                 edge_dicts.append(d)
 
-    return rows, edge_dicts
+    return edge_dicts
 
 
 # ── Team Totals ────────────────────────────────────────────────────────────────
 def analyze_team_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
-    """Returns (team_totals_rows, edge_dicts). Display/shadow tab for Year 1
-    (not promoted to Bet History yet — same rationale as Moneyline/Spread)."""
-    rows, edge_dicts = [], []
+    """Returns edge_dicts — one per qualifying team-total edge."""
+    edge_dicts = []
     today = datetime.now().strftime("%Y-%m-%d")
 
     for game_id, g in games_by_id.items():
@@ -965,10 +959,9 @@ def analyze_team_totals(games_by_id, team_stats, rest_lookup, weather_by_game):
                 "_kickoff_et": _fmt_time_et(g["commence_time"]),
             "_kickoff_utc": g.get("commence_time", ""),
             }
-            rows.append(row_from_header(TEAM_TOTAL_HEADER, d))
             edge_dicts.append(d)
 
-    return rows, edge_dicts
+    return edge_dicts
 
 
 def to_tracking_candidates(all_edge_dicts: list[dict]) -> list[dict]:
@@ -1086,47 +1079,9 @@ EDGES_HEADER = [
     "Confidence", "Confidence %", "Run at",
 ]
 
-HISTORY_HEADER = [
-    "Date", "Game", "Time (ET)", "Away QB", "Home QB",
-    "Bet Type", "Direction", "Stars", "Units Bet",
-    "Book", "Book Line", "Book Juice", "DK Juice", "Our Projection",
-    "Edge", "Away Score", "Home Score", "Actual Total",
-    "Result", "Units Result", "Confidence", "Confidence %", "Bet On", "Edge %",
-]
 
-GT_SHADOW_HEADER = [
-    "Date", "Game", "Time (ET)", "Away Team", "Home Team",
-    "Away QB", "Home QB", "Direction", "Book Line", "Book", "Book Juice",
-    "Our Projection", "Edge", "Edge % of Line", "Stars", "Units Would Bet",
-    "Proj Away Score", "Proj Home Score", "Book Implied%",
-    "Confidence", "Confidence %",
-    "Away Rest Days", "Home Rest Days",
-    "Wind MPH", "Wind Dir", "Temp (F)", "Weather Adj", "Roof",
-    "Away Score", "Home Score", "Actual Total", "Result", "Units Result", "Run at",
-]
 
-SHADOW_HEADER = [
-    "Date", "Game", "Time (ET)", "Away Team", "Home Team",
-    "Away QB", "Home QB", "Away Off Adj", "Home Off Adj",
-    "Away Def Adj", "Home Def Adj",
-    "Bet Type", "Bet Team", "Bet Side",
-    "Our Win%", "Proj Away Score", "Proj Home Score", "Proj Margin",
-    "Book", "Book Juice", "Book Implied%", "Consensus Implied%",
-    "Edge vs Book%", "Edge vs Consensus%", "Spread Line",
-    "Stars", "Units Would Bet", "Edge Bucket", "Market Favorite",
-    "Away Score", "Home Score", "Actual Winner", "Actual Margin",
-    "Did Favorite Win", "Bet Result", "Units Result",
-    "Prediction Error", "Was Overconfident", "Confidence", "Confidence %", "Run at",
-]
 
-TEAM_TOTAL_HEADER = [
-    "Date", "Game", "Team", "Direction",
-    "Best Book", "Book Line", "Book Juice", "Our Projection",
-    "Edge", "Edge %", "Stars", "Units",
-    "Confidence", "Confidence %",
-    "Away Score", "Home Score", "Actual Team Total",
-    "Result", "Units Result", "Run at",
-]
 
 # Not created as a tab yet — mirrors the MLB precedent of keeping the schema
 # ready in code and only adding the tab once FETCH_PLAYER_PROPS is enabled.
@@ -1155,37 +1110,6 @@ def write_edges_tab(gc, edge_rows):
     print(f"Wrote {len(edge_rows)} rows to 'Edges' tab")
 
 
-def snapshot_first_run(gc, tab, header, rows, sort_key=None):
-    """Shared first-run-of-day snapshot logic used by Bet History and both
-    shadow tabs. Inserts newest rows at the top; skips if today is already
-    logged unless --force is passed."""
-    w = ws(gc, NFL_SHEET_ID, tab, header=header)
-    if not rows:
-        print(f"No rows to snapshot to '{tab}'")
-        return
-    if today_already_logged(w) and not force:
-        print(f"'{tab}': today already exists — skipping (first-run protection)")
-        return
-    if today_already_logged(w) and force:
-        existing = w.get_all_values()
-        today = datetime.now().strftime("%Y-%m-%d")
-        rows_to_delete = [i + 1 for i, r in enumerate(existing) if i > 0 and r and r[0] == today]
-        # Today's rows are always contiguous (newest snapshot goes in right
-        # after the header each time), so one ranged delete covers them —
-        # deleting one row at a time here previously blew through Google's
-        # Sheets API write-quota-per-minute on tabs with 90+ rows to delete.
-        if rows_to_delete:
-            w.delete_rows(min(rows_to_delete), max(rows_to_delete))
-        print(f"  Force: deleted {len(rows_to_delete)} existing '{tab}' row(s) for today")
-    existing = w.get_all_values()
-    if sort_key:
-        rows = sorted(rows, key=sort_key, reverse=True)
-    if not existing or not existing[0] or existing[0][0] != "Date":
-        w.update([header] + rows, value_input_option="USER_ENTERED")
-    else:
-        w.insert_rows(rows, row=2, value_input_option="USER_ENTERED")
-    print(f"Inserted {len(rows)} row(s) at top of '{tab}'")
-
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
@@ -1202,6 +1126,7 @@ def main():
     odds_ws = ws(gc, NFL_SHEET_ID, "NFL Odds", header=None)
     odds_rows = sheet_to_dicts(odds_ws)
     print(f"  {len(odds_rows)} odds rows loaded")
+    prop_rows = [r for r in odds_rows if str(r.get("market_key", "")).startswith("player_")]
 
     if snapshot_only:
         # CLV snapshot path — see the `snapshot_only` comment at the top.
@@ -1212,7 +1137,7 @@ def main():
         cap = tracking.capture_closing_and_clv(gc)
         print(f"Closing/CLV: {cap['captured']} captured, {cap['pending']} awaiting kickoff"
               + (f", {cap['no_snapshot']} with NO pre-kickoff snapshot" if cap['no_snapshot'] else ""))
-        n_lines = tracking.append_line_log(gc, games_by_id)
+        n_lines = tracking.append_line_log(gc, games_by_id, prop_rows=prop_rows or None)
         print(f"Line Log: appended {n_lines} line quote(s)")
         print("\nDone (snapshot-only).")
         return
@@ -1249,16 +1174,15 @@ def main():
     print(f"  {len(weather_by_game)} game(s) with a weather pull")
 
     print("\nRunning game-level analysis ...")
-    history_rows, gt_shadow_rows, gt_edges = analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game)
-    ml_spread_rows, ml_edges               = analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_game)
-    tt_rows, tt_edges                      = analyze_team_totals(games_by_id, team_stats, rest_lookup, weather_by_game)
+    gt_edges = analyze_game_totals(games_by_id, team_stats, rest_lookup, weather_by_game)
+    ml_edges = analyze_moneyline_spread(games_by_id, team_stats, rest_lookup, weather_by_game)
+    tt_edges = analyze_team_totals(games_by_id, team_stats, rest_lookup, weather_by_game)
     edge_rows                              = build_edges(gt_edges + ml_edges + tt_edges)
 
     print(f"  {len(edge_rows)} edges found")
-    print(f"  {len(history_rows)} game total bets to snapshot (4-star+)")
-    print(f"  {len(gt_shadow_rows)} game total shadow rows")
-    print(f"  {len(ml_spread_rows)} ML/Spread shadow rows")
-    print(f"  {len(tt_rows)} team total rows")
+    print(f"  {len(gt_edges)} game total edge(s)")
+    print(f"  {len(ml_edges)} ML/Spread edge(s)")
+    print(f"  {len(tt_edges)} team total edge(s)")
 
     # ── Capture closing lines for anything that has kicked off since last run.
     # Runs first so a game that started overnight is captured before anything
@@ -1279,7 +1203,6 @@ def main():
           f"{stats['total']} tracked total")
 
     # ── Player props (gate is in nfl_fetch_odds.FETCH_PLAYER_PROPS) ─────────
-    prop_rows = [r for r in odds_rows if str(r.get("market_key", "")).startswith("player_")]
     if prop_rows:
         import nfl_props_model as props_model
         print("")
@@ -1294,6 +1217,23 @@ def main():
             print(f"  [check] {len(pmeta['unmatched'])} book player(s) with no projection: "
                   + ", ".join(pmeta["unmatched"][:5])
                   + (" ..." if len(pmeta["unmatched"]) > 5 else ""))
+        # Log EVERY priced prop market, qualifying or not — same reasoning as
+        # the game-level Projection Log. Without it, only bets that already
+        # cleared the threshold are ever visible, so the threshold can only be
+        # tuned on its own survivors. This is what lets us ask later "would the
+        # sub-4pp prop edges have won too?" without betting them now.
+        prop_log = [{
+            "game_id": x["game_id"], "game": x["game"], "kickoff_et": "",
+            "bet_type": props_model.PROP_LABEL.get(x["prop"], x["prop"]),
+            "side": f"{x['player']}",
+            "projection": x["projection"], "consensus_line": x["line"],
+            "edge": x["edge_pp"], "edge_pct": x["edge_pp"],
+            "stars": "", "units": "",
+            "qualified": x["edge_pp"] >= props_model.PROP_SCALE[0][0],
+        } for x in pmeta["diagnostics"]]
+        n_plog = tracking.append_projection_log(gc, prop_log)
+        print(f"  Projection Log (props): appended {n_plog} market(s)")
+
         if props_model.PROPS_TRACKING_ENABLED:
             pstats = tracking.upsert_bet_history(gc, prop_cands)
             print(f"  Bet History (props): {pstats['added']} new, {pstats['updated']} updated")
@@ -1302,7 +1242,7 @@ def main():
                   "per-stat divisor recalibration (see PROPS_TRACKING_ENABLED)")
 
     # ── Line Log: every distinct line on the market, all games, every run ────
-    n_lines = tracking.append_line_log(gc, games_by_id)
+    n_lines = tracking.append_line_log(gc, games_by_id, prop_rows=prop_rows or None)
     print(f"Line Log: appended {n_lines} line quote(s)")
 
     # ── Projection Log: every game, qualifying or not ────────────────────────

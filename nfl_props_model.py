@@ -59,6 +59,43 @@ EXPECTED_GAMES_PLAYED = 15.5
 # Cannot be settled until the season starts and we see a refreshed copy.
 # CHECK IN WEEK 2 and fix immediately if so.
 
+# ── Per-stat consensus calibration ───────────────────────────────────────────
+# MEASURED 2026-09-03 against all 16 games' full prop menus (n = 31-88 per
+# stat, up from 7 games / n = 14-59 on 08-30). Median projection / book line:
+#     pass_yds    1.027      receptions  1.067     pass_tds   1.133
+#     rec_yds     1.158      rush_yds    1.203
+#
+# WHY THIS IS SEPARATE FROM EXPECTED_GAMES_PLAYED: back-solving a divisor from
+# each ratio gives 15.9 / 16.5 / 17.6 / 18.0 / 18.7. If the whole effect were
+# games-played, every stat would imply the SAME divisor — a player plays the
+# same games whether you are counting his yards or his catches. It doesn't, so
+# there are two distinct effects stacked on top of each other:
+#   1. games played  -> EXPECTED_GAMES_PLAYED (15.5), roughly right; passing
+#      lands at 15.9, near enough to leave alone.
+#   2. the consensus sheet being differentially OPTIMISTIC by stat — rushing
+#      and receiving yards far more so than passing yards.
+# Only (2) belongs here.
+#
+# WHY CALIBRATING TO THE MARKET IS NOT CIRCULAR: this corrects the LEVEL only.
+# Per-player deviations survive untouched, so the model can still disagree with
+# the book about individual players — which is where any real edge lives. A
+# model that is uniformly 20% high is not finding edges, it is just biased, and
+# that bias has to come out before a per-player disagreement means anything.
+#
+# TDs are deliberately absent. Anytime TD measured +0.39pp mean edge across
+# ~253 markets on 08-30 — already unbiased — so applying a yardage correction
+# to the TD path would break something that works.
+#
+# RE-DERIVE after Week 4 or so against real results rather than against the
+# market, which is the stronger anchor once it exists.
+PROP_CALIBRATION = {
+    "pass_yds":   1.027,
+    "pass_tds":   1.133,
+    "rush_yds":   1.203,
+    "rec_yds":    1.158,
+    "receptions": 1.067,
+}
+
 # Defense-vs-position factors come from a full season of games, so they carry
 # real signal, but they also absorb strength-of-schedule and small-sample noise
 # (a defense that happened to face three elite WR rooms looks worse than it is).
@@ -362,7 +399,10 @@ def project_player_props(baseline: dict, opponent: str, proj_team_score: float,
             group = "RB"  # no separate QB-rush split; RB rushing is the closest proxy
 
         mf = matchup_factor(dvp, opponent, group, stat)
-        base = season_total / EXPECTED_GAMES_PLAYED
+        # Divide out the consensus sheet's stat-specific optimism (see
+        # PROP_CALIBRATION above). Level correction only — relative differences
+        # between players are preserved.
+        base = season_total / EXPECTED_GAMES_PLAYED / PROP_CALIBRATION.get(prop, 1.0)
         value = base * script * mf
         if prop in ("rec_yds", "receptions"):
             value *= wr_cb_mult
@@ -457,7 +497,11 @@ PROP_SCALE = [
 # FLIP TO TRUE once the per-stat divisors are re-derived against all 16 games'
 # full prop menus (owner agreed 2026-08-30 to do that a few days out, before
 # Week 1 — not to wait for in-season data, which does NOT fix a level bias).
-PROPS_TRACKING_ENABLED = False
+# ENABLED 2026-09-03. Unblocked by three things landing together:
+#   1. PROP_CALIBRATION removed the level bias (all five stats now 1.000)
+#   2. prop lines are now written to the Line Log -> closing capture works
+#   3. grade_prop() handles all six prop types, incl. Void for inactives
+PROPS_TRACKING_ENABLED = True
 
 # Odds API market key -> our internal prop key
 MARKET_TO_PROP = {
