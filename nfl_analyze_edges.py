@@ -1057,12 +1057,11 @@ def build_projection_log_entries(games_by_id, team_stats, rest_lookup,
 
 
 def build_edges(all_edge_dicts: list[dict]) -> list:
-    """Combine all bet-type edge dicts into the unified Edges tab, sorted by
-    Units desc (matches the MLB Edges tab convention)."""
-    rows = [row_from_header(EDGES_HEADER, d) for d in all_edge_dicts]
-    units_col = EDGES_HEADER.index("Units")
-    rows.sort(key=lambda r: r[units_col], reverse=True)
-    return rows
+    """Combine all bet-type edge dicts into unified Edges rows.
+
+    Ordering is applied in write_edges_tab() instead, once props have been
+    merged in — see sort_edge_rows()."""
+    return [row_from_header(EDGES_HEADER, d) for d in all_edge_dicts]
 
 
 # ── Header schemas ─────────────────────────────────────────────────────────────
@@ -1103,11 +1102,39 @@ def today_already_logged(worksheet) -> bool:
         return False
 
 
+def sort_edge_rows(rows: list[list]) -> list[list]:
+    """
+    Sort the Edges board by STARS then UNITS, both descending — same convention
+    as the MLB Edges tab, so the strongest plays are always at the top.
+
+    Sorting happens HERE rather than in build_edges() because props are added
+    after that call; sorting earlier left them simply appended below the
+    game-level rows instead of interleaved by strength.
+
+    Stars are emoji strings, so rank on the count rather than the string —
+    lexicographic order on emoji happens to work for a single repeated glyph
+    but breaks the moment the label format changes.
+    """
+    si = EDGES_HEADER.index("Stars")
+    ui = EDGES_HEADER.index("Units")
+
+    def key(r):
+        stars = str(r[si]).count("⭐") if si < len(r) else 0
+        try:
+            units = float(r[ui])
+        except (TypeError, ValueError, IndexError):
+            units = 0.0
+        return (stars, units)
+
+    return sorted(rows, key=key, reverse=True)
+
+
 def write_edges_tab(gc, edge_rows):
+    edge_rows = sort_edge_rows(edge_rows)
     w = ws(gc, NFL_SHEET_ID, "Edges", header=EDGES_HEADER)
     w.clear()
     w.update([EDGES_HEADER] + edge_rows, value_input_option="USER_ENTERED")
-    print(f"Wrote {len(edge_rows)} rows to 'Edges' tab")
+    print(f"Wrote {len(edge_rows)} rows to 'Edges' tab (sorted by stars, then units)")
 
 
 
