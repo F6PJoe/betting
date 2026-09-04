@@ -248,6 +248,42 @@ def main():
             requested_week = int(sys.argv[i + 1])
     lines_only = "--lines-only" in sys.argv
 
+    # --only-if-kickoff-within N : bail out when no game starts within N hours.
+    #
+    # The snapshot crons are day-of-week based, so they fire on every Sunday and
+    # Monday whether or not the NFL is playing. Measured 2026-09-04: Sun Sep 6
+    # would have fired 18 times and Mon Sep 7 six more, with ZERO games on the
+    # slate (Week 1 opens Sep 9) — ~456 credits and ~5,000 junk Line Log rows
+    # for nothing. The same waste recurs on every bye week and in the off-season.
+    #
+    # The check itself is FREE: kickoff times come from the nflverse schedule,
+    # not the Odds API, so nothing is spent deciding not to spend.
+    within = None
+    for i, a in enumerate(sys.argv):
+        if a == "--only-if-kickoff-within" and i + 1 < len(sys.argv):
+            within = float(sys.argv[i + 1])
+    if within is not None:
+        import nfl_data_py as _nfl
+        sched = _nfl.import_schedules([2026])
+        sched = sched[sched["game_type"] == "REG"]
+        now = datetime.now(timezone.utc)
+        soonest = None
+        for _, g in sched.iterrows():
+            try:
+                ko = datetime.fromisoformat(f"{g['gameday']}T{g['gametime']}:00-04:00")
+            except (ValueError, TypeError):
+                continue
+            if ko > now and (soonest is None or ko < soonest):
+                soonest = ko
+        if soonest is None:
+            print("No upcoming scheduled games — nothing to snapshot.")
+            return
+        hrs = (soonest - now).total_seconds() / 3600
+        if hrs > within:
+            print(f"Next kickoff is {hrs:.1f}h away (> {within}h) — skipping, 0 credits spent.")
+            return
+        print(f"Next kickoff {hrs:.1f}h away — proceeding.")
+
     last_hdrs = {}
 
     # One flat 3-credit call returns the whole season; we scope afterwards.
