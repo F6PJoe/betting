@@ -43,6 +43,11 @@ force = "--force" in sys.argv
 # arbitrary mid-afternoon moments rather than at the morning read.
 snapshot_only = "--snapshot-only" in sys.argv
 
+# Only record a CLV snapshot when a game is within this many hours of kickoff.
+# Matches --only-if-kickoff-within on the fetch side; see the snapshot_only
+# branch in main() for why both ends need it.
+SNAPSHOT_KICKOFF_WINDOW_H = 6
+
 
 # ── Google Sheets helpers ──────────────────────────────────────────────────────
 def get_client():
@@ -1233,11 +1238,33 @@ def main():
         games_by_id = group_odds_by_game(odds_rows)
         games_by_id, dropped = filter_to_scheduled_games(games_by_id, rest_lookup)
         print(f"  {len(games_by_id)} regular-season game(s)")
+        # Closing capture ALWAYS runs — it is idempotent, costs no credits, and
+        # backfills anything a missed run left behind.
         cap = tracking.capture_closing_and_clv(gc)
         print(f"Closing/CLV: {cap['captured']} captured, {cap['pending']} awaiting kickoff"
               + (f", {cap['no_snapshot']} with NO pre-kickoff snapshot" if cap['no_snapshot'] else ""))
-        n_lines = tracking.append_line_log(gc, games_by_id, prop_rows=prop_rows or None)
-        print(f"Line Log: appended {n_lines} line quote(s)")
+
+        # But only APPEND a snapshot when a game is actually near kickoff. The
+        # fetch step has the same guard, so on a game-less day the odds tab is
+        # stale — re-logging it would write thousands of duplicate rows that say
+        # nothing new (Sun Sep 6: 18 fires x ~220 rows with zero games).
+        soonest_h = None
+        now = datetime.now(timezone.utc)
+        for g in games_by_id.values():
+            k = None
+            try:
+                k = datetime.fromisoformat(str(g.get("commence_time", "")).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+            if k and k > now:
+                h = (k - now).total_seconds() / 3600
+                soonest_h = h if soonest_h is None else min(soonest_h, h)
+        if soonest_h is not None and soonest_h > SNAPSHOT_KICKOFF_WINDOW_H:
+            print(f"Line Log: skipped — next kickoff {soonest_h:.1f}h away "
+                  f"(> {SNAPSHOT_KICKOFF_WINDOW_H}h), nothing new to record")
+        else:
+            n_lines = tracking.append_line_log(gc, games_by_id, prop_rows=prop_rows or None)
+            print(f"Line Log: appended {n_lines} line quote(s)")
         print("\nDone (snapshot-only).")
         return
 
