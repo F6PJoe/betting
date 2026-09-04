@@ -26,43 +26,64 @@ name: NFL Line Snapshots (CLV)
 
 on:
   schedule:
-    # ── Sunday early window (1:00 PM ET = 17:00 UTC EDT / 18:00 UTC EST) ──
-    - cron: '30 14 * * 0'
-    - cron: '0 15 * * 0'
-    - cron: '30 15 * * 0'
-    - cron: '0 16 * * 0'
-    - cron: '30 16 * * 0'
-    - cron: '0 17 * * 0'
-    # ── Sunday afternoon window (4:05/4:25 PM ET) ──
-    - cron: '0 18 * * 0'
-    - cron: '30 18 * * 0'
-    - cron: '0 19 * * 0'
-    - cron: '30 19 * * 0'
-    - cron: '0 20 * * 0'
-    - cron: '30 20 * * 0'
-    # ── Sunday night (8:20 PM ET) — spills into Monday UTC ──
-    - cron: '0 22 * * 0'
-    - cron: '30 22 * * 0'
-    - cron: '0 23 * * 0'
-    - cron: '30 23 * * 0'
-    - cron: '0 0 * * 1'
-    - cron: '30 0 * * 1'
-    # ── Monday Night Football (8:15 PM ET) — Tuesday in UTC ──
-    - cron: '0 23 * * 1'
-    - cron: '30 23 * * 1'
-    - cron: '0 0 * * 2'
-    - cron: '30 0 * * 2'
-    # ── Thursday Night Football (8:15 PM ET) — Friday in UTC ──
-    - cron: '0 23 * * 4'
-    - cron: '30 23 * * 4'
-    - cron: '0 0 * * 5'
-    - cron: '30 0 * * 5'
-    # ── Week 1 only: the season opener is a WEDNESDAY (9 Sep 2026, 8:20 PM ET).
-    # Harmless the rest of the season — no Wednesday games means the fetcher
-    # finds nothing upcoming and the run costs ~3 credits.
-    - cron: '0 23 * * 3'
-    - cron: '30 23 * * 3'
-    - cron: '0 0 * * 4'
+  # SNAPSHOT PLACEMENT — rebuilt 2026-09-03 from MEASURED lag, not assumption.
+  #
+  # GitHub Actions cron does not fire on time. Measured across real fires:
+  #   snapshot workflow  median 54m late, MAX 302m
+  #   morning workflow   median 258m late
+  # A cron aimed exactly at T-90 can therefore land after kickoff, which would
+  # capture a closing line from BEFORE the inactive report and quietly make
+  # every CLV number for that game wrong.
+  #
+  # Two mitigations, both applied below:
+  #  1. NOTHING ON :00 OR :30. Every previous cron sat on one of those slots —
+  #     the most contested minutes on GitHub's scheduler, since that is where
+  #     everyone points theirs. The 302m outliers all came from them.
+  #  2. DENSITY, NOT PRECISION. Six crons per kickoff window spanning T-150 to
+  #     T-25. At the median 54m lag those land ~T-96 through ~T+29, so several
+  #     fall inside the T-90-to-kickoff window even when individual fires drift.
+  #
+  # capture_closing_and_clv() takes the LAST snapshot strictly before kickoff,
+  # so extra fires are free accuracy — the only failure mode is having none.
+  #
+  # NOTE: new cron schedules take a cycle (~12h) to register with GitHub.
+    - cron: '37 14 * * 0'   # Sun 14:37Z  ~T-150 for Sun 1:00pm ET
+    - cron: '55 14 * * 0'   # Sun 14:55Z  ~T-125 for Sun 1:00pm ET
+    - cron: '20 15 * * 0'   # Sun 15:20Z  ~T-100 for Sun 1:00pm ET
+    - cron: '45 15 * * 0'   # Sun 15:45Z  ~T-75 for Sun 1:00pm ET
+    - cron: '10 16 * * 0'   # Sun 16:10Z  ~T-50 for Sun 1:00pm ET
+    - cron: '35 16 * * 0'   # Sun 16:35Z  ~T-25 for Sun 1:00pm ET
+    - cron: '55 17 * * 0'   # Sun 17:55Z  ~T-150 for Sun 4:25pm ET
+    - cron: '20 18 * * 0'   # Sun 18:20Z  ~T-125 for Sun 4:25pm ET
+    - cron: '45 18 * * 0'   # Sun 18:45Z  ~T-100 for Sun 4:25pm ET
+    - cron: '10 19 * * 0'   # Sun 19:10Z  ~T-75 for Sun 4:25pm ET
+    - cron: '35 19 * * 0'   # Sun 19:35Z  ~T-50 for Sun 4:25pm ET
+    - cron: '7 20 * * 0'   # Sun 20:07Z  ~T-25 for Sun 4:25pm ET
+    - cron: '50 21 * * 0'   # Sun 21:50Z  ~T-150 for Sun 8:20pm ET
+    - cron: '15 22 * * 0'   # Sun 22:15Z  ~T-125 for Sun 8:20pm ET
+    - cron: '40 22 * * 0'   # Sun 22:40Z  ~T-100 for Sun 8:20pm ET
+    - cron: '5 23 * * 0'   # Sun 23:05Z  ~T-75 for Sun 8:20pm ET
+    - cron: '37 23 * * 0'   # Sun 23:37Z  ~T-50 for Sun 8:20pm ET
+    - cron: '55 23 * * 0'   # Sun 23:55Z  ~T-25 for Sun 8:20pm ET
+    - cron: '45 21 * * 1'   # Mon 21:45Z  ~T-150 for Mon 8:15pm ET
+    - cron: '10 22 * * 1'   # Mon 22:10Z  ~T-125 for Mon 8:15pm ET
+    - cron: '35 22 * * 1'   # Mon 22:35Z  ~T-100 for Mon 8:15pm ET
+    - cron: '7 23 * * 1'   # Mon 23:07Z  ~T-75 for Mon 8:15pm ET
+    - cron: '25 23 * * 1'   # Mon 23:25Z  ~T-50 for Mon 8:15pm ET
+    - cron: '50 23 * * 1'   # Mon 23:50Z  ~T-25 for Mon 8:15pm ET
+    - cron: '50 21 * * 3'   # Wed 21:50Z  ~T-150 for Wed 8:20pm ET
+    - cron: '15 22 * * 3'   # Wed 22:15Z  ~T-125 for Wed 8:20pm ET
+    - cron: '40 22 * * 3'   # Wed 22:40Z  ~T-100 for Wed 8:20pm ET
+    - cron: '5 23 * * 3'   # Wed 23:05Z  ~T-75 for Wed 8:20pm ET
+    - cron: '37 23 * * 3'   # Wed 23:37Z  ~T-50 for Wed 8:20pm ET
+    - cron: '55 23 * * 3'   # Wed 23:55Z  ~T-25 for Wed 8:20pm ET
+    - cron: '45 21 * * 4'   # Thu 21:45Z  ~T-150 for Thu 8:15pm ET
+    - cron: '10 22 * * 4'   # Thu 22:10Z  ~T-125 for Thu 8:15pm ET
+    - cron: '35 22 * * 4'   # Thu 22:35Z  ~T-100 for Thu 8:15pm ET
+    - cron: '7 23 * * 4'   # Thu 23:07Z  ~T-75 for Thu 8:15pm ET
+    - cron: '25 23 * * 4'   # Thu 23:25Z  ~T-50 for Thu 8:15pm ET
+    - cron: '50 23 * * 4'   # Thu 23:50Z  ~T-25 for Thu 8:15pm ET
+
   workflow_dispatch:
 
 env:
