@@ -24,3 +24,8 @@ Thumbs.db
 # diff noise on every commit and leaked local Windows paths in tracebacks.
 run_log.txt
 clv_log.txt
+
+# DFS work lives outside this repo -- see OneDrive\Desktop\Main Slate Files\engine
+dfs_*.py
+MainRules*.md
+*handoff_notes.md
