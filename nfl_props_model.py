@@ -634,7 +634,29 @@ PROP_LABEL = {
 # Anything beyond ~+/-35% therefore lives in the BASELINE, i.e. the role.
 # Measured effect: markets inside 0.80-1.25 average 7.0pp disagreement;
 # those below 0.60 average 41.5pp.
-ROLE_MISMATCH_BAND = (0.70, 1.45)
+#
+# TIGHTENED 2026-09-08 from (0.70, 1.45), on the owner's call. Two reasons.
+#
+# First, the original numbers never matched the reasoning directly above them:
+# that argument lands on +/-35%, which is 0.65-1.35, but the band was written
+# as -30%/+45%. The upper bound in particular was looser than anything here
+# justifies.
+#
+# Second, once the 09-08 level bias was removed (see calibrate_to_market) the
+# shape of what remained was visible, and 53 of 93 qualifying edges — 57% —
+# came from disagreeing with the book by more than 15% about a player's LEVEL
+# rather than his matchup. They were the top of the board, not the tail of it:
+# Jacoby Brissett Under 226.5 at ratio 0.77 for a 30.9pp "edge" was the single
+# biggest play on the slate, with Jadarian Price (0.71) and three separate
+# Brissett lines behind it. Same failure as the Kirk Cousins case that created
+# this gate, just landing at a magnitude that slipped under a 0.70 floor.
+#
+# 0.80 is where the damping argument runs out: a projection more than 20% off
+# its own baseline cannot have got there through matchup and script, so it came
+# from the baseline. 1.35 keeps the ceiling symmetric with the +/-35% logic.
+# RE-DERIVE against graded results after Week 4 — a band set from mechanics is
+# a starting point, and real Win/Loss on these is the stronger anchor.
+ROLE_MISMATCH_BAND = (0.80, 1.35)
 
 
 def prop_sd(prop: str, mu: float) -> float | None:
