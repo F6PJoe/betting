@@ -6,10 +6,12 @@ the seven prop categories the model covers:
     QB pass yards, QB pass TDs, RB rush yards, RB reception yards,
     WR/TE reception yards, WR/TE receptions, anytime TD
 
-IMPORTANT: this module produces PROJECTIONS ONLY. It never touches the Odds
-API and does not need book lines to run, so the whole engine can be built and
-validated with zero credits while FETCH_PLAYER_PROPS is still gated off. Edge
-calculation (projection vs. book line) is a separate, later step.
+IMPORTANT: this module never touches the Odds API — it only ever reads rows
+that were already fetched, so nothing here can spend a credit. project_slate()
+needs no book lines at all and can be built and validated for free.
+calibrate_to_market() and analyze_player_props() do read posted lines: the
+first to re-level our projections against the market, the second to price the
+edge. Both take those lines as an argument; neither goes and gets them.
 
 Data sources, all free:
   - organic consensus sheet (Joe Bond's) -> per-player season baseline
@@ -21,6 +23,7 @@ Data sources, all free:
 """
 
 import math
+import statistics
 
 import nfl_props_data as props_data
 import nfl_analyze_edges as edges
@@ -60,41 +63,76 @@ EXPECTED_GAMES_PLAYED = 15.5
 # CHECK IN WEEK 2 and fix immediately if so.
 
 # ── Per-stat consensus calibration ───────────────────────────────────────────
-# MEASURED 2026-09-03 against all 16 games' full prop menus (n = 31-88 per
-# stat, up from 7 games / n = 14-59 on 08-30). Median projection / book line:
-#     pass_yds    1.027      receptions  1.067     pass_tds   1.133
-#     rec_yds     1.158      rush_yds    1.203
+# The organic sheet's season totals sit at a different LEVEL from the market,
+# differently per stat, so a per-game baseline has to be re-levelled before any
+# per-player disagreement means anything.
 #
 # WHY THIS IS SEPARATE FROM EXPECTED_GAMES_PLAYED: back-solving a divisor from
-# each ratio gives 15.9 / 16.5 / 17.6 / 18.0 / 18.7. If the whole effect were
-# games-played, every stat would imply the SAME divisor — a player plays the
-# same games whether you are counting his yards or his catches. It doesn't, so
-# there are two distinct effects stacked on top of each other:
-#   1. games played  -> EXPECTED_GAMES_PLAYED (15.5), roughly right; passing
-#      lands at 15.9, near enough to leave alone.
-#   2. the consensus sheet being differentially OPTIMISTIC by stat — rushing
-#      and receiving yards far more so than passing yards.
+# each ratio gives a DIFFERENT answer per stat (15.9 / 16.5 / 17.6 / 18.0 /
+# 18.7 when first measured). If the whole effect were games-played, every stat
+# would imply the SAME divisor — a player plays the same games whether you are
+# counting his yards or his catches. It doesn't, so there are two distinct
+# effects stacked on top of each other:
+#   1. games played  -> EXPECTED_GAMES_PLAYED (15.5), roughly right.
+#   2. the consensus sheet being differentially levelled by stat.
 # Only (2) belongs here.
 #
 # WHY CALIBRATING TO THE MARKET IS NOT CIRCULAR: this corrects the LEVEL only.
 # Per-player deviations survive untouched, so the model can still disagree with
 # the book about individual players — which is where any real edge lives. A
-# model that is uniformly 20% high is not finding edges, it is just biased, and
+# model that is uniformly 20% off is not finding edges, it is just biased, and
 # that bias has to come out before a per-player disagreement means anything.
 #
-# TDs are deliberately absent. Anytime TD measured +0.39pp mean edge across
-# ~253 markets on 08-30 — already unbiased — so applying a yardage correction
-# to the TD path would break something that works.
+# *** THESE ARE FALLBACKS ONLY. *** The live numbers are measured at RUNTIME by
+# calibrate_to_market() below; these apply only when a stat has too few posted
+# markets to measure (early-week runs), or when the measurement fails its
+# sanity band.
 #
-# RE-DERIVE after Week 4 or so against real results rather than against the
-# market, which is the stronger anchor once it exists.
+# WHY RUNTIME AND NOT A CONSTANT: the organic sheet refreshes on its own — it
+# carries its own 'Update Date' tab. On 2026-09-08 at 4:01 AM it refreshed and
+# every total dropped 12-15% (Pass Yds 0.881x, Pass Att 0.858x, Pass TD 0.862x,
+# Rush Yds 0.846x vs. the sheet's own pre-refresh copy). The constants below
+# had been measured five days earlier, so within one refresh the median
+# projection/line went 1.000 -> 0.889 and the prop board went 94% Unders — 134
+# Unders against 8 Overs, none of them real. A hardcoded level correction
+# against an input that re-levels itself weekly is stale the moment it lands;
+# measuring it each run is the only version that cannot silently drift.
+#
+# Values below re-derived 2026-09-08 against the post-refresh sheet.
 PROP_CALIBRATION = {
-    "pass_yds":   1.027,
-    "pass_tds":   1.133,
-    "rush_yds":   1.203,
-    "rec_yds":    1.158,
-    "receptions": 1.067,
+    "pass_yds":   0.913,
+    "pass_tds":   0.906,
+    "rush_yds":   1.074,
+    "rec_yds":    1.060,
+    "receptions": 0.945,
 }
+
+# Anytime TD is deliberately NOT calibrated — see the block in
+# calibrate_to_market(). It was measured unbiased at +0.39pp mean edge over
+# ~253 markets on 08-30, and still reads -0.02pp on the same metric after the
+# 09-08 sheet refresh. This records that baseline so a genuine future drift has
+# something to be compared against, rather than being re-derived from memory.
+# Measured over role-gated players at the best available book, which is the
+# population and the pricing analyze_player_props actually bets.
+TD_BASELINE_PP = 0.39
+
+# A median needs a real sample behind it. Below this many matched markets for a
+# stat we keep the fallback rather than re-levelling the whole slate off a
+# handful of players — early-week runs post only a few markets per stat.
+#
+# WHY 15 AND NOT HIGHER: the passing stats have a hard ceiling of one starting
+# QB per team, so a full slate posts about 32 pass_yds markets and fewer after
+# the role gate. A threshold in the 25-30 range would read as "safely
+# conservative" and in practice permanently disable calibration for the two
+# stats that cannot ever produce a big sample.
+MIN_CALIBRATION_SAMPLE = 15
+
+# A correction outside this band is not a calibration signal, it is a broken
+# input (sheet half-written, a column renamed, wrong season). Re-levelling the
+# model to match it would hide exactly the failure we most need to see, so we
+# keep the fallback and shout instead. The 09-08 refresh needed 0.89 — well
+# inside — so this only trips on something genuinely wrong.
+CALIBRATION_SANITY_BAND = (0.75, 1.35)
 
 # Defense-vs-position factors come from a full season of games, so they carry
 # real signal, but they also absorb strength-of-schedule and small-sample noise
@@ -611,6 +649,184 @@ def _is_team_entry(name: str) -> bool:
     """Book lists team defenses in the anytime-TD market; we don't model those."""
     n = str(name)
     return "D/ST" in n or n.endswith(" Defense")
+
+
+def _market_lines(prop_rows: list[dict]) -> tuple[dict, dict]:
+    """(prop, player) -> median posted line, and player -> [anytime-TD prices]."""
+    lines, td_prices = {}, {}
+    for r in prop_rows:
+        prop = MARKET_TO_PROP.get(str(r.get("market_key")))
+        if not prop:
+            continue
+        player = str(r.get("player", "")).strip()
+        if not player or _is_team_entry(player):
+            continue
+        if prop == "anytime_td":
+            if str(r.get("direction")) == "Yes":
+                try:
+                    td_prices.setdefault(player, []).append(float(r.get("price")))
+                except (TypeError, ValueError):
+                    pass
+            continue
+        try:
+            lines.setdefault((prop, player), []).append(float(r.get("point")))
+        except (TypeError, ValueError):
+            pass
+    return ({k: statistics.median(v) for k, v in lines.items() if v}, td_prices)
+
+
+def calibrate_to_market(projections: list[dict], prop_rows: list[dict]) -> dict:
+    """
+    Re-level our projections against the posted market, per stat, IN PLACE.
+
+    See the PROP_CALIBRATION block for why this is a runtime measurement rather
+    than a constant: the organic sheet re-levels itself on refresh, and a
+    hardcoded correction goes stale silently the moment it does.
+
+    Median, not mean, for the yardage stats: a handful of backups whose
+    consensus totals reflect a partial role would drag a mean badly. The
+    median ignores them.
+
+    CALIBRATED ON THE POPULATION WE ACTUALLY BET — the same ROLE_MISMATCH_BAND
+    that analyze_player_props applies is applied here. Measuring over every
+    posted market instead gets this wrong in a way that matters: the anytime-TD
+    menu carries ~170 deep backups and longshots that the gate throws out, and
+    calibrating across all 407 rather than the 237 we would bet turned a TD
+    book that was already unbiased (-0.02pp) into +3.42pp the other way. A
+    level correction has to be measured where it will be spent.
+
+    ITERATED, because that gate makes a single pass under-correct exactly when
+    correction matters most. If the sheet re-levels DOWN, the lowest players
+    fall out of the bottom of the band, so the survivors read high and the
+    measured correction comes up short. Measured on a simulated -20% refresh: a
+    single pass recovered the median only to 0.951 and still left 80% of the
+    board on Unders. Re-measuring after each pass lets the gate population
+    settle, and it converges in two or three.
+
+    Returns a per-stat report — measured factor, sample size, and what was
+    actually applied — for the run log and the Pipeline Health tab.
+    """
+    lines, td_prices = _market_lines(prop_rows)
+    name_map = props_data.build_name_to_id()
+    name_map.pop("_ambiguous", None)
+
+    by_pid = {p["player_id"]: p for p in projections if p.get("player_id")}
+    td_pairs = []
+
+    # Resolve names ONCE — it is the expensive part, and iterating must not
+    # repeat it. Ungated here; the gate is applied per pass, since which
+    # players clear it changes as the level moves.
+    matched = {}
+    for (prop, player), line in lines.items():
+        pid = props_data.resolve_player_id(player, name_map)
+        proj = by_pid.get(pid) if pid else None
+        if not proj or prop not in proj.get("props", {}) or not line:
+            continue
+        matched.setdefault(prop, []).append((proj["props"][prop], float(line)))
+
+    for player, prices in td_prices.items():
+        pid = props_data.resolve_player_id(player, name_map)
+        proj = by_pid.get(pid) if pid else None
+        if not proj or "anytime_td" not in proj.get("props", {}):
+            continue
+        fairs = [edges.american_to_implied(px) / ANYTIME_TD_OVERROUND for px in prices]
+        mu = float(proj["props"]["anytime_td"]["projection"])
+        # Gate on the MEAN price across books but score against the BEST one —
+        # exactly what analyze_player_props does, so the number reported here
+        # is the same number the edges are actually priced off.
+        mean_fair = statistics.fmean(fairs)
+        if 0 < mean_fair < 1 and mu > 0:
+            if ROLE_MISMATCH_BAND[0] <= mu / mean_fair <= ROLE_MISMATCH_BAND[1]:
+                td_pairs.append((mu, min(fairs)))
+
+    report = {}
+    lo, hi = CALIBRATION_SANITY_BAND
+
+    # ── yardage / reception stats: projection scales linearly ────────────────
+    for prop in ("pass_yds", "pass_tds", "rush_yds", "rec_yds", "receptions"):
+        pairs = matched.get(prop, [])
+        fallback = PROP_CALIBRATION.get(prop, 1.0)
+
+        def gated_median():
+            v = [d["projection"] / line for d, line in pairs
+                 if line and ROLE_MISMATCH_BAND[0] <= d["projection"] / line
+                 <= ROLE_MISMATCH_BAND[1]]
+            return (float(statistics.median(v)) if v else None), len(v)
+
+        m, n = gated_median()
+        if n < MIN_CALIBRATION_SAMPLE:
+            report[prop] = {"n": n, "measured": None, "applied": 1.0,
+                            "status": "fallback (too few markets)"}
+            continue
+        if not (lo <= m <= hi):
+            report[prop] = {"n": n, "measured": round(m, 3), "applied": 1.0,
+                            "status": f"REJECTED — outside {lo}-{hi}, kept fallback"}
+            continue
+
+        # Divide the level out: after this the median projection sits on the
+        # median line, and every per-player deviation around it is preserved.
+        # Repeat until the gate population stops moving — see the docstring.
+        # CONVERGENCE TOLERANCE 0.002: projections are stored to one decimal,
+        # so chasing below ~0.2% is chasing rounding, not level.
+        total, first, passes = 1.0, m, 0
+        for _ in range(5):
+            passes += 1
+            for p in projections:
+                d = p.get("props", {}).get(prop)
+                if d:
+                    d["projection"] = round(d["projection"] / m, 1)
+                    d["baseline_per_game"] = round(d["baseline_per_game"] / m, 1)
+            total *= m
+            m, n = gated_median()
+            if m is None or n < MIN_CALIBRATION_SAMPLE or abs(m - 1.0) <= 0.002:
+                break
+        # Each pass was individually inside the sanity band, but a compounded
+        # correction can still land outside it. That is not necessarily wrong —
+        # it is what a large genuine re-level looks like — so it is flagged for
+        # review rather than discarded, which would leave the board skewed.
+        status = ("measured" if lo <= total <= hi
+                  else f"measured — compounded to {total:.3f}, outside {lo}-{hi}, REVIEW")
+        report[prop] = {"n": n, "measured": round(first, 3),
+                        "applied": round(1 / total, 3), "status": status,
+                        "passes": passes, "residual": round(m, 4) if m else None,
+                        "effective_constant": round(fallback * total, 3)}
+
+    # ── anytime TD: MEASURED AND REPORTED, DELIBERATELY NOT APPLIED ──────────
+    # TDs were left uncorrected when the yardage calibration was first built,
+    # on a measurement of +0.39pp mean edge over ~253 markets (08-30). That
+    # baseline was taken over the players that clear the role gate, priced at
+    # the BEST book — the same population and pricing analyze_player_props
+    # uses. On that metric of record TDs read -0.02pp on 09-08: unchanged, and
+    # still unbiased. So there is nothing here to correct.
+    #
+    # WHY THIS IS WORTH SPELLING OUT: the same slate reads -3.16pp measured
+    # over every posted TD market against the mean price across books. That
+    # number is real but it is not the same quantity — the TD menu carries
+    # ~170 deep backups and longshots the role gate discards, and they sit
+    # where a Poisson built off season TD totals disagrees with the book by
+    # construction. Reading it as drift and "fixing" it moved a book that was
+    # sitting at -0.02pp to +1.17pp and took the slate from 7 anytime-TD bets
+    # to 19. Two populations, two answers, and only one of them is the
+    # population we bet.
+    #
+    # The residual best-book edge after any level correction is line-shopping
+    # value, which is real and should be kept, not calibrated away. So this
+    # measures on the metric of record and reports it; if a future sheet
+    # refresh genuinely moves TDs, THRESHOLD is where that becomes visible.
+    TD_REPORT_THRESHOLD_PP = 2.0
+    if len(td_pairs) < MIN_CALIBRATION_SAMPLE:
+        report["anytime_td"] = {"n": len(td_pairs), "measured": None,
+                                "applied": 1.0, "status": "not enough markets to measure"}
+    else:
+        bias_pp = statistics.fmean([(p - f) * 100 for p, f in td_pairs])
+        drifted = abs(bias_pp - TD_BASELINE_PP) > TD_REPORT_THRESHOLD_PP
+        report["anytime_td"] = {
+            "n": len(td_pairs), "measured": round(bias_pp, 2), "applied": 1.0,
+            "bias_pp": round(bias_pp, 2),
+            "status": (f"DRIFTED from {TD_BASELINE_PP:+}pp baseline — review"
+                       if drifted else "measured, unbiased — no correction applied")}
+
+    return report
 
 
 def analyze_player_props(prop_rows: list[dict], projections: list[dict]) -> tuple[list, list]:

@@ -16,6 +16,7 @@ Two design rules carried over from the MLB audit:
 """
 
 import os
+import statistics
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -29,6 +30,11 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 HEALTH_TAB = "Pipeline Health"
 HEALTH_HEADER = ["Checked", "Status", "Check", "Finding", "Detail"]
 
+# Projection Log 'Bet Type' values that carry a player prop line. Anytime TD is
+# excluded on purpose: its "line" is a probability, not a yardage number, so it
+# does not belong in a projection/line ratio.
+PROP_TYPES = {"Pass Yds", "Pass TDs", "Rush Yds", "Rec Yds", "Receptions"}
+
 # Conditions that are expected right now and must NOT turn the status red.
 # Each entry is (check_name, reason_it_is_fine). Prune as the season starts.
 ACCEPTED = {
@@ -37,7 +43,10 @@ ACCEPTED = {
     "No team totals": "books post team totals close to kickoff, not weeks out",
     "No weather yet": "NWS only forecasts ~7 days out",
     "WR-CB matchup PDF": "only needed once the regular season starts",
-    "Prop tracking gate": "deliberately gated until divisors are recalibrated pre-Week-1",
+    # "Prop tracking gate" was accepted while props were deliberately gated off.
+    # They have been tracking since 2026-08-30, so the gate being CLOSED is now
+    # a real problem, not an expected state — accepting it would mask exactly
+    # the failure the check exists to catch.
 }
 
 
@@ -154,6 +163,54 @@ def audit(gc) -> list:
            "props write to Bet History" if props_model.PROPS_TRACKING_ENABLED
            else "GATED — props analysed but not tracked",
            "pending per-stat divisor recalibration off all 16 games' prop menus")
+
+    # ── Prop level bias, measured independently of the model ─────────────────
+    # calibrate_to_market() re-levels props at runtime, but a run that silently
+    # fell back to the constants would leave the board skewed with nothing to
+    # show for it. So this re-measures from the Projection Log — which records
+    # every priced market, qualifying or not — rather than trusting a value the
+    # model handed over. An independent check is the only kind worth having.
+    #
+    # WHY 0.04: the level correction is applied to the MEDIAN, so a healthy run
+    # lands within rounding of 1.000. On 09-08 the stale constants put it at
+    # 0.912 and the board went 94% Unders, so anything past ~4% is already
+    # skewing which side we bet, well before it is large enough to notice by eye.
+    try:
+        plog = [r for r in edges.sheet_to_dicts(
+            gc.open_by_key(edges.NFL_SHEET_ID).worksheet("Projection Log"))]
+        # Scope to the most recent RUN, not merely the most recent date. The log
+        # appends a fresh set of rows every run, so a day with two runs would
+        # otherwise pool them — and the whole point of this check is to see the
+        # level the model is at NOW, which pooling would average away.
+        latest = max(((str(r.get("Date"))[:10], str(r.get("Run"))) for r in plog),
+                     default=None)
+        ratios = []
+        for r in plog:
+            if (str(r.get("Date"))[:10], str(r.get("Run"))) != latest:
+                continue
+            if r.get("Bet Type") not in PROP_TYPES:
+                continue
+            try:
+                proj = float(r.get("Our Projection"))
+                line = float(r.get("Consensus Line"))
+            except (TypeError, ValueError):
+                continue
+            if line > 0:
+                ratios.append(proj / line)
+        if len(ratios) < 20:
+            _check(results, "Prop level bias", True,
+                   f"only {len(ratios)} market(s) logged — not enough to measure",
+                   "informational until a full menu is posted")
+        else:
+            med = statistics.median(ratios)
+            under = sum(1 for x in ratios if x < 1.0) / len(ratios)
+            _check(results, "Prop level bias", abs(med - 1.0) <= 0.04,
+                   f"median projection/line {med:.3f} on n={len(ratios)} "
+                   f"({under:.0%} below line)",
+                   "runtime calibration may have fallen back — check the "
+                   "organic sheet's Update Date tab for a refresh")
+    except Exception as e:
+        _check(results, "Prop level bias", False, "could not measure", str(e))
 
     return [[today + " " + now.strftime("%H:%M")] + row for row in results]
 

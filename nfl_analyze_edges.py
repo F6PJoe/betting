@@ -1333,6 +1333,23 @@ def main():
         print(f"Player props: {len(prop_rows)} quote(s) on the board")
         projections, pdiag = props_model.project_slate(
             gc, games_by_id, team_stats, rest_lookup, weather_by_game)
+
+        # Re-level against the posted market BEFORE pricing anything. The
+        # organic sheet refreshes itself (it dropped 12-15% overnight on
+        # 2026-09-08) and a stale level correction turns the whole board
+        # one-directional — 94% Unders that day, none of them real. Runs
+        # before analyze_player_props so the role gate and every edge see
+        # corrected numbers. See calibrate_to_market() for the reasoning.
+        calib = props_model.calibrate_to_market(projections, prop_rows)
+        for stat, c in sorted(calib.items()):
+            note = (f"measured {c['measured']} on n={c['n']}"
+                    if c["measured"] is not None else f"n={c['n']}")
+            print(f"  calibration {stat:12} x{c['applied']:<6} {note}  [{c['status']}]")
+        rejected = [s for s, c in calib.items() if "REJECTED" in c["status"]]
+        if rejected:
+            print(f"  [CHECK] calibration rejected for {', '.join(rejected)} — "
+                  f"the organic sheet may be mid-update or broken.")
+
         prop_cands, pmeta = props_model.analyze_player_props(prop_rows, projections)
         print(f"  {pdiag['players_projected']} player-game projections | "
               f"{len(pmeta['diagnostics'])} market(s) priced | "
