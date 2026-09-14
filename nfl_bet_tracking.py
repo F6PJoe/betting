@@ -36,6 +36,7 @@ what makes CLV meaningful, and overwriting them is precisely how MLB's CLV
 silently read zero for its entire existence.
 """
 
+import math
 from datetime import datetime, timezone
 
 import gspread
@@ -185,6 +186,49 @@ def clv_price_pct(entry_price, closing_price) -> float | None:
 
 
 # ── Sheet helpers ─────────────────────────────────────────────────────────────
+def _clean_cell(v):
+    """A NaN or infinity cannot be sent to Sheets at all — the JSON encoder
+    refuses it and the whole write fails. Blank it instead."""
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return ""
+    return v
+
+
+def safe_rewrite(worksheet, grid: list[list]) -> None:
+    """
+    Replace a tab's contents WITHOUT ever leaving it empty.
+
+    WHY THIS EXISTS (2026-09-11): every rewrite of Bet History used to be
+    `clear()` then `update()`. On the Friday morning run the grader built a row
+    holding a NaN, the update raised after the clear had already succeeded, and
+    Bet History was left EMPTY — every Week 1 bet entered before Saturday was
+    lost, including all bets on the two games already played. A clear-first
+    rewrite turns ANY write failure (a NaN, a 429, a network blip, a grid-limit
+    error) into total loss of the permanent record.
+
+    Order is now: sanitise -> grow the grid if needed -> overwrite in place from
+    A1 -> only THEN blank any leftover rows below. If the overwrite fails, the
+    old contents are still there. If the trailing blank fails, the worst case is
+    stale rows below the new data, never missing ones.
+    """
+    grid = [[_clean_cell(c) for c in row] for row in grid]
+    n_rows = len(grid)
+    n_cols = max((len(r) for r in grid), default=0)
+    grid = [r + [""] * (n_cols - len(r)) for r in grid]
+
+    # values.update does not grow the sheet; writing past its edge is an error.
+    if n_rows > worksheet.row_count or n_cols > worksheet.col_count:
+        worksheet.resize(rows=max(n_rows, worksheet.row_count),
+                         cols=max(n_cols, worksheet.col_count))
+
+    worksheet.update(grid, "A1", value_input_option="RAW")
+
+    if worksheet.row_count > n_rows:
+        last_col = gspread.utils.rowcol_to_a1(1, max(n_cols, worksheet.col_count))
+        last_col = "".join(ch for ch in last_col if ch.isalpha())
+        worksheet.batch_clear([f"A{n_rows + 1}:{last_col}{worksheet.row_count}"])
+
+
 def _tab(gc, name: str, header: list[str]):
     """
     Open a tab and GUARANTEE its header row exists.
@@ -236,8 +280,7 @@ def _tab(gc, name: str, header: list[str]):
               f"— mapped positionally, not remapped by name")
     added = [h for h in header if h not in old_ix]
     print(f"  [{name}] schema migrated: +{added or 'none'} ({len(migrated)} rows remapped)")
-    w.clear()
-    w.update([header] + migrated, value_input_option="RAW")
+    safe_rewrite(w, [header] + migrated)
     return w
 
 
@@ -399,13 +442,13 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
     rows.sort(key=lambda r: (str(r[ix["Entry Date"]]), str(r[ix["Entry Run"]])),
               reverse=True)
 
-    ws.clear()
-    # RAW, not USER_ENTERED. With USER_ENTERED, Sheets parses "2026-08-12" into
-    # a DATE and an unformatted read then hands back a serial number, so every
-    # later `stored_date == today` comparison silently fails — which is how the
-    # "already counted today" guard below would have quietly stopped working.
-    # RAW keeps text as text; numerics are already real floats via _num().
-    ws.update([header] + rows, value_input_option="RAW")
+    # RAW, not USER_ENTERED (safe_rewrite always writes RAW). With USER_ENTERED,
+    # Sheets parses "2026-08-12" into a DATE and an unformatted read then hands
+    # back a serial number, so every later `stored_date == today` comparison
+    # silently fails — which is how the "already counted today" guard below
+    # would have quietly stopped working. RAW keeps text as text; numerics are
+    # already real floats via _num(). Never clear-then-write: see safe_rewrite.
+    safe_rewrite(ws, [header] + rows)
     _pin_numeric_formats(ws, header, BET_HISTORY_NUMERIC_COLS)
 
     return {"added": added, "updated": updated, "total": len(rows)}
@@ -692,8 +735,7 @@ def capture_closing_and_clv(gc) -> dict:
         captured += 1
 
     if captured or backfilled:
-        bh.clear()
-        bh.update([header] + rows, value_input_option="RAW")
+        safe_rewrite(bh, [header] + rows)          # never clear-then-write
         _pin_numeric_formats(bh, header, BET_HISTORY_NUMERIC_COLS)
 
     return {"captured": captured, "pending": pending,

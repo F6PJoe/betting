@@ -91,8 +91,21 @@ def load_player_game_stats(season: int = 2026) -> tuple[dict, dict]:
     def bump(gid, pid, key, val):
         if not pid or pid != pid:
             return
+        # PBP leaves passing_yards / receiving_yards BLANK (NaN) on every
+        # incomplete pass, and `val or 0` does not catch that: NaN is truthy.
+        # One incompletion made a player's whole yardage total NaN — 35 QBs and
+        # 146 receivers in Week 1. That crashed the Bet History write on 09-11
+        # and, had it not crashed, would have graded every Over on those props
+        # a Loss and every Under a Win (NaN > line is always False). Yards on
+        # an incompletion are genuinely zero, so zero is the correct value.
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            v = 0.0
+        if v != v:          # NaN
+            v = 0.0
         stats.setdefault((gid, pid), {}).setdefault(key, 0.0)
-        stats[(gid, pid)][key] += float(val or 0)
+        stats[(gid, pid)][key] += v
 
     for _, p in pbp.iterrows():
         gid = p.get("game_id")
@@ -316,8 +329,9 @@ def grade_bet_history(gc) -> dict:
         graded += 1
 
     if graded:
-        ws.clear()
-        ws.update([header] + rows, value_input_option="RAW")
+        # Never clear-then-write — this exact line wiped Bet History on 09-11.
+        # See tracking.safe_rewrite.
+        tracking.safe_rewrite(ws, [header] + rows)
         tracking._pin_numeric_formats(ws, header, tracking.BET_HISTORY_NUMERIC_COLS)
 
     return {"graded": graded, "awaiting": awaiting, "unmatched": unmatched}
