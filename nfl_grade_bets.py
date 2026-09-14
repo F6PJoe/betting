@@ -387,8 +387,7 @@ def rebuild_performance(gc) -> int:
     perf = summarise("Primary", primary) + summarise("All Lines", graded)
 
     w = tracking._tab(gc, PERFORMANCE_TAB, PERFORMANCE_HEADER)
-    w.clear()
-    w.update([PERFORMANCE_HEADER] + perf, value_input_option="RAW")
+    tracking.safe_rewrite(w, [PERFORMANCE_HEADER] + perf)   # never clear-then-write
     return len(perf)
 
 

@@ -16,6 +16,7 @@ Two design rules carried over from the MLB audit:
 """
 
 import os
+import re
 import statistics
 from datetime import datetime, timezone, timedelta
 
@@ -100,6 +101,35 @@ def audit(gc) -> list:
     try:
         bh = edges.sheet_to_dicts(sh.worksheet(tracking.BET_HISTORY_TAB))
         _check(results, "Bets tracked", bool(bh), f"{len(bh)} tracked bet(s)")
+
+        # ── Bet History must never shrink ───────────────────────────────────
+        # WHY (2026-09-11): a crash mid-rewrite left Bet History EMPTY. This
+        # audit did flag "0 tracked bets" that morning — but the next day's
+        # run re-entered the current board, the count looked healthy again,
+        # and the alarm went green having been up for one day. 294 bets were
+        # gone and nothing still said so.
+        #
+        # Rows are never deleted by design (they persist through grading), so
+        # ANY drop in the count is data loss. Compare against a HIGH-WATER
+        # mark, not last run's count: a last-run comparison fires once and
+        # then accepts the damaged count as the new normal, which is exactly
+        # the self-silencing that hid this. The mark only rises, so the check
+        # stays red on every run until the rows come back or someone clears
+        # the mark on purpose (e.g. after an owner-requested reset).
+        prev_hw = 0
+        try:
+            for hrow in sh.worksheet(HEALTH_TAB).get_all_values():
+                if len(hrow) >= 5 and hrow[2] == "Bet History never shrinks":
+                    m = re.search(r"high-water (\d+)", hrow[4])
+                    prev_hw = int(m.group(1)) if m else 0
+        except Exception:
+            pass
+        hw = max(prev_hw, len(bh))
+        _check(results, "Bet History never shrinks", len(bh) >= prev_hw,
+               f"{len(bh)} rows" if len(bh) >= prev_hw
+               else f"{len(bh)} rows — DOWN from {prev_hw}: tracked bets were lost",
+               f"high-water {hw}. Rows are never deleted by design, so a drop is "
+               f"data loss. If rows were removed ON PURPOSE, clear this cell to reset.")
 
         keys = [r.get("Bet Key") for r in bh]
         dupes = len(keys) - len(set(keys))
@@ -222,8 +252,9 @@ def write_health(gc, rows) -> str:
               "OVERALL", f"{len(problems)} problem(s), {len(rows)} check(s)",
               "; ".join(r[2] for r in problems) if problems else "all clear"]
     w = tracking._tab(gc, HEALTH_TAB, HEALTH_HEADER)
-    w.clear()
-    w.update([HEALTH_HEADER, banner] + rows, value_input_option="RAW")
+    # Never clear-then-write: an empty Health tab would also erase the Bet
+    # History high-water mark and silently reset that alarm.
+    tracking.safe_rewrite(w, [HEALTH_HEADER, banner] + rows)
     return status
 
 
