@@ -43,7 +43,9 @@ ACCEPTED = {
     "Bets awaiting final score": "normal before a slate is played",
     "No team totals": "books post team totals close to kickoff, not weeks out",
     "No weather yet": "NWS only forecasts ~7 days out",
-    "WR-CB matchup PDF": "only needed once the regular season starts",
+    # "WR-CB matchup PDF" was accepted pre-season ("only needed once the regular
+    # season starts"). The season has started, so a missing/stale sheet is now
+    # a real gap and must show as one.
     # "Prop tracking gate" was accepted while props were deliberately gated off.
     # They have been tracking since 2026-08-30, so the gate being CLOSED is now
     # a real problem, not an expected state — accepting it would mask exactly
@@ -176,10 +178,38 @@ def audit(gc) -> list:
 
     # ── Props readiness (not yet enabled, so informational) ──────────────────
     import nfl_props_data as props_data
-    have_pdf = os.path.exists(props_data.WR_CB_PDF_PATH)
-    _check(results, "WR-CB matchup PDF", have_pdf,
-           "present" if have_pdf else "not uploaded",
-           "weekly manual upload; overwrite nfl_wr_cb_matchup_current.pdf")
+    # WHY THIS CHECKS CONTENT, NOT EXISTENCE (2026-09-17): the old check only
+    # asked whether the file existed, and reported "OK — present" through all
+    # of Week 1 and into Week 2 while the file on disk was still the JULY
+    # Super Bowl sample (6 rows, NE and SEA only). File age cannot be used
+    # instead: in GitHub Actions every file's timestamp is the checkout time.
+    # So test what matters — does the sheet describe games actually on THIS
+    # week's schedule? A row only ever applies when its offense really plays
+    # its defense (wr_cb_factor requires def_team == opponent), so a stale
+    # sheet silently contributes nothing rather than failing loudly.
+    if not os.path.exists(props_data.WR_CB_PDF_PATH):
+        _check(results, "WR-CB matchup PDF", False, "not uploaded",
+               "weekly manual upload; overwrite nfl_wr_cb_matchup_current.pdf")
+    else:
+        try:
+            import nfl_data_py as nfl_data
+            # ESPN and nflverse abbreviate a few teams differently.
+            alias = {"LAR": "LA", "WSH": "WAS", "JAC": "JAX", "LVR": "LV"}
+            fix = lambda t: alias.get(str(t or "").strip().upper(), str(t or "").strip().upper())
+            sched = nfl_data.import_schedules([now_utc.year])
+            sched = sched[(sched["game_type"] == "REG")]
+            upcoming = sched[sched["home_score"].isna()]
+            week = int(upcoming["week"].min())
+            games = {frozenset((g["home_team"], g["away_team"]))
+                     for _, g in sched[sched["week"] == week].iterrows()}
+            wr = props_data.load_wr_cb_matchups()
+            live = [r for r in wr if frozenset((fix(r.get("off_team")), fix(r.get("def_team")))) in games]
+            _check(results, "WR-CB matchup PDF", bool(live),
+                   f"{len(live)} of {len(wr)} row(s) match Week {week} games",
+                   "0 means the file is not this week's sheet — WR-CB adjustments are "
+                   "silently OFF. Overwrite nfl_wr_cb_matchup_current.pdf with this week's.")
+        except Exception as e:
+            _check(results, "WR-CB matchup PDF", False, "could not check", str(e))
 
     # Props were approved by the owner 2026-08-30, so ENABLED is now the
     # expected state — flagging it as a problem would be crying wolf, and a
