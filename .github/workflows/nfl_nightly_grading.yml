@@ -1,0 +1,91 @@
+name: NFL Nightly Grading
+
+# GRADING ONLY — no odds fetch, no analysis, no picks. Costs ZERO API credits:
+# grading reads final scores and play-by-play from nflverse and never touches
+# the Odds API.
+#
+# WHY THIS EXISTS (2026-09-21): grading used to happen only inside the morning
+# run at ~11 AM ET. Sunday's games finish around 11:30 PM, so results sat
+# ungraded for roughly twelve hours and the sheet looked stuck every Monday
+# morning. The owner noticed three weeks running. This closes that gap.
+#
+# RUNS EVERY DAY, not just after game days. A day with nothing to grade costs
+# one idle job and writes nothing (the grader only rewrites Bet History when it
+# actually grades a row), and running daily means Thursday, Saturday, holiday
+# and playoff games are all covered without maintaining a game-day calendar.
+#
+# SAFE TO RUN OFTEN. Grading is a full lookback — it grades every ungraded row
+# that has a final score, however old — and it is idempotent: an already-graded
+# row is skipped. Closing-line capture behaves the same way. So this run and the
+# morning run can never fight over the same row, and a missed night self-heals.
+#
+# PROPS MAY DEFER AT THIS HOUR, BY DESIGN. Snap counts (which separate "was
+# inactive, void the bet" from "played and did nothing, a real Under win") are
+# published by PFR hours after a game. If they are not up yet, prop rows return
+# DEFER and stay ungraded rather than being guessed at; game-level bets grade
+# immediately, and the next run picks up the props. A deferred grade self-heals;
+# a wrong one is silently wrong forever.
+
+on:
+  schedule:
+    # 06:14 UTC = 2:14 AM EDT, and 07:14 UTC = 2:14 AM EST after the 1 Nov
+    # change. Both run year-round rather than being switched over in November:
+    # the off-season-of-DST one simply lands an hour later the same night, and
+    # a second idempotent zero-credit pass costs nothing. That is cheaper than
+    # a DST edit nobody remembers to make.
+    #
+    # NOT ON :00 OR :30 — measured on this repo, every one of the worst cron
+    # delays (max 302m) came from those slots, the most contested minutes on
+    # GitHub's scheduler. See nfl_line_snapshots.yml for the measurements.
+    - cron: '14 6 * * *'
+    - cron: '14 7 * * *'
+  workflow_dispatch:
+
+# Never let two grading runs overlap — both rewrite Bet History, and a
+# read-modify-write race between them could drop rows. Queue, don't cancel: a
+# grading pass is always worth finishing.
+concurrency:
+  group: nfl-nightly-grading
+  cancel-in-progress: false
+
+env:
+  TZ: America/New_York
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25    # nflverse play-by-play is a season-sized download
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Same stack as the morning routine — pinned to 3.11 because nfl_data_py
+      # declares numpy<2 / pandas<2, which has no wheels on newer Pythons.
+      - name: Install dependencies
+        run: pip install gspread google-auth requests python-dotenv tzdata
+                          nfl_data_py pandas appdirs fastparquet pdfplumber
+
+      - name: Write Google credentials
+        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google_credentials.json
+
+      - name: Create .env file
+        run: echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> .env
+
+      - name: Grade bets + capture closing lines
+        run: python nfl_grade_bets.py
+
+      # Refreshes the Pipeline Health tab so the owner sees a CURRENT status
+      # first thing, rather than yesterday's. Runs even if grading failed —
+      # that is exactly when the report is wanted — and is never allowed to
+      # fail the job. The owner cannot read Actions logs; this tab is the only
+      # alarm they see.
+      - name: Pipeline audit (writes Pipeline Health tab)
+        if: always()
+        continue-on-error: true
+        run: python nfl_pipeline_audit.py
