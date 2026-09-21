@@ -407,7 +407,7 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
     today = now.strftime("%Y-%m-%d")
     run_at = now.strftime("%H:%M")
 
-    added = updated = 0
+    added = updated = skipped_started = 0
     for c in candidates:
         if c.get("stars", 0) < MIN_STARS_TO_TRACK:
             continue
@@ -438,6 +438,23 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
                 if col in ix and not str(r[ix[col]]).strip() and val:
                     r[ix[col]] = val
             updated += 1
+            continue
+
+        # NEVER OPEN A NEW BET ON A GAME THAT HAS ALREADY KICKED OFF.
+        # Found 2026-09-21: a run against a stale odds tab created 30 bets on
+        # games played the day before. They are unbettable by definition, they
+        # can never have a closing line (no snapshot exists between entry and a
+        # kickoff already past), and grading them would record results for bets
+        # nobody could have placed. The scheduled runs normally fire before the
+        # day's games, which is the only reason this had not bitten yet — a
+        # late Monday run would do exactly the same thing.
+        #
+        # Only NEW rows are blocked. Existing bets keep refreshing normally,
+        # and a missing or unparseable kickoff fails OPEN so a timestamp gap
+        # can never silently stop tracking.
+        ko = _parse_utc(c.get("kickoff_utc"))
+        if ko and ko < datetime.now(timezone.utc):
+            skipped_started += 1
             continue
 
         is_primary = "FALSE" if grp in groups_seen else "TRUE"
@@ -493,7 +510,11 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
     safe_rewrite(ws, [header] + rows)
     _pin_numeric_formats(ws, header, BET_HISTORY_NUMERIC_COLS)
 
-    return {"added": added, "updated": updated, "total": len(rows)}
+    if skipped_started:
+        print(f"  [guard] skipped {skipped_started} new bet(s) on games already "
+              f"kicked off — stale odds tab")
+    return {"added": added, "updated": updated, "total": len(rows),
+            "skipped_started": skipped_started}
 
 
 # ── Line log ──────────────────────────────────────────────────────────────────
