@@ -356,6 +356,18 @@ def load_player_shares(season: int = 2025) -> dict:
 
 
 # ── WR-CB shadow-coverage matchup (weekly manual upload) ──────────────────────
+# ESPN abbreviates five teams differently from nflverse. Normalised AT PARSE
+# TIME so every consumer sees nflverse codes — wr_cb_factor matches def_team
+# against the opponent by exact string, so without this ARI, BAL, CLE, HOU and
+# LA would silently never match and a quarter of the league would get no WR-CB
+# adjustment with nothing reporting a problem. Derived by diffing the two code
+# sets on the Week 2 full-slate sheet, not guessed: those five are the entire
+# difference, and each maps unambiguously.
+WR_CB_TEAM_ALIASES = {
+    "ARZ": "ARI", "BLT": "BAL", "CLV": "CLE", "HST": "HOU", "LAR": "LA",
+}
+
+
 def load_wr_cb_matchups(pdf_path: str = WR_CB_PDF_PATH) -> list[dict]:
     """
     Parse the weekly ESPN WR-CB matchup PDF the user uploads. This is the one
@@ -439,5 +451,8 @@ def load_wr_cb_matchups(pdf_path: str = WR_CB_PDF_PATH) -> list[dict]:
                     continue
                 d = _bucket_row(line)
                 if d.get("receiver") and d.get("defender"):
+                    for col in ("off_team", "def_team"):
+                        t = str(d.get(col) or "").strip().upper()
+                        d[col] = WR_CB_TEAM_ALIASES.get(t, t)
                     rows.append(d)
     return rows

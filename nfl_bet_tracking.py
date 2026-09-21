@@ -56,9 +56,40 @@ PROJECTION_LOG_TAB = "Projection Log"
 MIN_STARS_TO_TRACK = 3
 
 
+# ── Model cohorts ────────────────────────────────────────────────────────────
+# A bet is only evidence about the model that MADE it. On 2026-09-08 two fixes
+# landed within eleven minutes: the prop level calibration moved to runtime
+# (the sheet had silently re-levelled and the board had gone 94% Unders), and
+# ROLE_MISMATCH_BAND tightened to 0.80-1.35. Bets placed before that came from
+# a model we no longer run, and pooling them hides what the current one does —
+# measured 2026-09-21, they were -15.8 units of the -25.6 total, and they were
+# the entire reason the edge signal looked inverted.
+#
+# Tagged rather than deleted. Deleting would have destroyed exactly the data
+# that made that diagnosis possible, and a record you prune when it looks bad
+# is not a record. The headline Performance tab scopes to CURRENT_MODEL; the
+# older cohorts stay in Bet History, still graded, still analysable.
+#
+# Cutoff is the entry RUN, not the date: the 09-08 morning run (11:32) was the
+# old model and the 21:48 run that evening was the new one.
+MODEL_PREFIX = "pre-fix"        # broken prop calibration, loose role band
+MODEL_CALIB = "calib-only"      # calibration fixed, band not yet tightened
+CURRENT_MODEL = "current"       # both fixes live — the model we run today
+
+
+def model_cohort(entry_date: str, entry_run: str) -> str:
+    """Which model version produced a bet, from when it was entered."""
+    stamp = f"{str(entry_date)[:10]} {str(entry_run)[:5]}"
+    if stamp < "2026-09-08 21:48":
+        return MODEL_PREFIX
+    if stamp < "2026-09-08 21:58":
+        return MODEL_CALIB
+    return CURRENT_MODEL
+
+
 BET_HISTORY_HEADER = [
     # identity / grouping
-    "Bet Key", "Opinion Group", "Is Primary",
+    "Bet Key", "Opinion Group", "Is Primary", "Model",
     # when and what
     "Entry Date", "Entry Run", "Game", "Kickoff (ET)", "Kickoff UTC",
     "Bet Type", "Side", "Bet On",
@@ -359,6 +390,16 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
         rows = [list(r) + [""] * (len(header) - len(r)) for r in existing[1:]]
 
     ix = {h: i for i, h in enumerate(header)}
+
+    # Backfill the cohort tag on any row that predates the column. A schema
+    # migration creates it EMPTY and entry fields are frozen, so nothing else
+    # would ever fill it — the same trap that left Kickoff UTC blank forever
+    # on faded bets. Self-heals on every run.
+    if "Model" in ix:
+        for r in rows:
+            if not str(r[ix["Model"]]).strip():
+                r[ix["Model"]] = model_cohort(r[ix["Entry Date"]], r[ix["Entry Run"]])
+
     by_key = {r[ix["Bet Key"]]: r for r in rows if r and r[ix["Bet Key"]]}
     groups_seen = {r[ix["Opinion Group"]] for r in rows if r and r[ix["Opinion Group"]]}
 
@@ -410,6 +451,7 @@ def upsert_bet_history(gc, candidates: list[dict]) -> dict:
         put("Bet Key", key)
         put("Opinion Group", grp)
         put("Is Primary", is_primary)
+        put("Model", CURRENT_MODEL)
         put("Entry Date", today)
         put("Entry Run", run_at)
         put("Game", c.get("game", ""))

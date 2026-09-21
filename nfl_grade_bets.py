@@ -353,7 +353,18 @@ def rebuild_performance(gc) -> int:
     """
     ws = tracking._tab(gc, tracking.BET_HISTORY_TAB, tracking.BET_HISTORY_HEADER)
     rows = edges.sheet_to_dicts(ws)
-    graded = [r for r in rows if str(r.get("Result", "")).strip()]
+    all_graded = [r for r in rows if str(r.get("Result", "")).strip()]
+
+    # SCOPED TO THE CURRENT MODEL. See tracking.model_cohort: bets from before
+    # the 2026-09-08 fixes came from a model we no longer run, and pooling them
+    # describes nothing that exists. They stay in Bet History, graded and
+    # tagged; they just do not count as this model's record.
+    def cohort(r):
+        c = str(r.get("Model", "")).strip()
+        return c or tracking.model_cohort(r.get("Entry Date"), r.get("Entry Run"))
+
+    graded = [r for r in all_graded if cohort(r) == tracking.CURRENT_MODEL]
+    retired = [r for r in all_graded if cohort(r) != tracking.CURRENT_MODEL]
 
     def summarise(scope_name, subset):
         buckets = {}
@@ -409,6 +420,16 @@ def rebuild_performance(gc) -> int:
         return ["TOTAL", txt] + [""] * (len(PERFORMANCE_HEADER) - 2)
 
     primary = [r for r in graded if str(r.get("Is Primary", "")).upper() == "TRUE"]
+    retired_primary = [r for r in retired if str(r.get("Is Primary", "")).upper() == "TRUE"]
+    retired_note = ""
+    if retired_primary:
+        rw = sum(1 for r in retired_primary if r["Result"] == "Win")
+        rl = sum(1 for r in retired_primary if r["Result"] == "Loss")
+        rres = sum(tracking._num(r.get("Units Result"), 0) or 0 for r in retired_primary)
+        retired_note = (f"EXCLUDED: {rw}-{rl}, {rres:+.2f} units from "
+                        f"{len(retired_primary)} bets made before the 2026-09-08 "
+                        f"fixes, by a model no longer in use. Still in Bet History, "
+                        f"tagged in the 'Model' column.")
 
     # TWO TABS, NOT TWO BLOCKS ON ONE TAB (2026-09-21). Both scopes used to be
     # stacked in a single sheet, so adding up the Units Result column returned
@@ -431,6 +452,8 @@ def rebuild_performance(gc) -> int:
         grid = [PERFORMANCE_HEADER,
                 total_line(scope, subset),
                 ["", note] + [""] * (len(PERFORMANCE_HEADER) - 2)]
+        if retired_note:
+            grid.append(["", retired_note] + [""] * (len(PERFORMANCE_HEADER) - 2))
         grid += summarise(scope, subset)
         tracking.safe_rewrite(w, grid)          # never clear-then-write
         # The stored numbers are exact, but this tab carried a leftover "0.0"
@@ -440,7 +463,7 @@ def rebuild_performance(gc) -> int:
         # columns so the display matches the banner.
         tracking._pin_numeric_formats(w, PERFORMANCE_HEADER,
                                       ["Units Staked", "Units Result"])
-        written += len(grid) - 3
+        written += len(grid) - (4 if retired_note else 3)
     return written
 
 

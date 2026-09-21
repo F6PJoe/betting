@@ -193,9 +193,10 @@ def audit(gc) -> list:
     else:
         try:
             import nfl_data_py as nfl_data
-            # ESPN and nflverse abbreviate a few teams differently.
-            alias = {"LAR": "LA", "WSH": "WAS", "JAC": "JAX", "LVR": "LV"}
-            fix = lambda t: alias.get(str(t or "").strip().upper(), str(t or "").strip().upper())
+            # Team codes are normalised to nflverse at parse time — see
+            # props_data.WR_CB_TEAM_ALIASES. (An earlier guess at that mapping
+            # here was wrong: the real differences are ARZ/BLT/CLV/HST/LAR.)
+            fix = lambda t: str(t or "").strip().upper()
             sched = nfl_data.import_schedules([now_utc.year])
             sched = sched[(sched["game_type"] == "REG")]
             upcoming = sched[sched["home_score"].isna()]
