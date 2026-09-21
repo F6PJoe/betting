@@ -29,6 +29,7 @@ import nfl_analyze_edges as edges
 import nfl_bet_tracking as tracking
 
 PERFORMANCE_TAB = "Performance"
+PERFORMANCE_ALL_TAB = "Performance (All Lines)"
 
 PERFORMANCE_HEADER = [
     "Scope", "Bet Type", "Stars", "Bets", "Wins", "Losses", "Pushes",
@@ -339,13 +340,16 @@ def grade_bet_history(gc) -> dict:
 
 def rebuild_performance(gc) -> int:
     """
-    Rebuild the Performance tab from graded rows.
+    Rebuild the performance tabs from graded rows.
 
     Written at TWO scopes so the correlation between same-game lines can never
     silently inflate the record:
       "Primary" — one bet per opinion group. THE HEADLINE RECORD.
       "All Lines" — every tracked line. Useful for CLV and for asking whether
                     later entries beat first ones; NOT a win-rate to quote.
+
+    Each scope gets its OWN TAB, each opening with a TOTAL banner. See the
+    comment at the bottom of this function for why they are not stacked.
     """
     ws = tracking._tab(gc, tracking.BET_HISTORY_TAB, tracking.BET_HISTORY_HEADER)
     rows = edges.sheet_to_dicts(ws)
@@ -383,12 +387,61 @@ def rebuild_performance(gc) -> int:
             ])
         return out
 
-    primary = [r for r in graded if str(r.get("Is Primary", "")).upper() == "TRUE"]
-    perf = summarise("Primary", primary) + summarise("All Lines", graded)
+    def total_line(scope_name, subset):
+        """One-line total for the banner row.
 
-    w = tracking._tab(gc, PERFORMANCE_TAB, PERFORMANCE_HEADER)
-    tracking.safe_rewrite(w, [PERFORMANCE_HEADER] + perf)   # never clear-then-write
-    return len(perf)
+        The numbers go in the banner as TEXT, with every numeric column left
+        EMPTY. That is deliberate: a totals row carrying real numbers makes
+        summing the units column return double the true figure, which is the
+        same trap this split is fixing. Blank numeric cells mean the column
+        still adds up to exactly the scope's result.
+        """
+        w_ = sum(1 for r in subset if str(r.get("Result", "")) == "Win")
+        l_ = sum(1 for r in subset if str(r.get("Result", "")) == "Loss")
+        staked = sum(tracking._num(r.get("Entry Units"), 0) or 0 for r in subset
+                     if str(r.get("Result", "")) in ("Win", "Loss"))
+        res = sum(tracking._num(r.get("Units Result"), 0) or 0 for r in subset)
+        clv = [v for r in subset if (v := tracking._num(r.get("CLV Line"))) is not None]
+        txt = (f"{w_}-{l_} ({w_ / (w_ + l_) * 100:.1f}%) · {res:+.2f} units on "
+               f"{staked:.1f} staked · ROI {res / staked * 100:+.1f}% · "
+               f"avg CLV line {sum(clv) / len(clv):+.2f}" if (w_ + l_) and staked
+               else "no graded bets yet")
+        return ["TOTAL", txt] + [""] * (len(PERFORMANCE_HEADER) - 2)
+
+    primary = [r for r in graded if str(r.get("Is Primary", "")).upper() == "TRUE"]
+
+    # TWO TABS, NOT TWO BLOCKS ON ONE TAB (2026-09-21). Both scopes used to be
+    # stacked in a single sheet, so adding up the Units Result column returned
+    # -82.7 when the real figure was -25.6: "All Lines" contains every "Primary"
+    # bet a second time, and nothing on the tab said so. The owner hit exactly
+    # that. A tab whose column does not add up is worse than no tab.
+    written = 0
+    for tab, scope, subset, note in (
+        (PERFORMANCE_TAB, "Primary", primary,
+         "THE RECORD — one bet per opinion. Lions -3.5/-4.5/-5.5 is one opinion, "
+         "not three, so counting each line would flatter the record and make "
+         "volatile-line weeks score higher than quiet ones."),
+        (PERFORMANCE_ALL_TAB, "All Lines", graded,
+         "DIAGNOSTIC ONLY — every tracked line, for CLV and for asking whether "
+         "later entries beat first ones. It INCLUDES every bet on the "
+         f"'{PERFORMANCE_TAB}' tab a second time, so it is NOT a win rate to "
+         "quote and its total must never be added to that one."),
+    ):
+        w = tracking._tab(gc, tab, PERFORMANCE_HEADER)
+        grid = [PERFORMANCE_HEADER,
+                total_line(scope, subset),
+                ["", note] + [""] * (len(PERFORMANCE_HEADER) - 2)]
+        grid += summarise(scope, subset)
+        tracking.safe_rewrite(w, grid)          # never clear-then-write
+        # The stored numbers are exact, but this tab carried a leftover "0.0"
+        # display format, so every unit figure RENDERED to one decimal and
+        # adding up what you see came to -25.8 against a true -25.59. Sheets'
+        # own =SUM() was right the whole time; the eye was not. Pin the money
+        # columns so the display matches the banner.
+        tracking._pin_numeric_formats(w, PERFORMANCE_HEADER,
+                                      ["Units Staked", "Units Result"])
+        written += len(grid) - 3
+    return written
 
 
 def main():
