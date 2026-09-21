@@ -213,8 +213,37 @@ POINTS_PER_OFFENSIVE_TD = 9.6
 # target-magnet effects (a shadow corner who follows WR1s shows a high allowed
 # target rate simply because WR1s draw targets), while F/R is a cleaner
 # efficiency measure.
-LEAGUE_AVG_ALLOWED_FR = 0.28
+LEAGUE_AVG_ALLOWED_FR = 0.28   # fallback; the sheet's own weekly mean is preferred
 WR_CB_MAX_ADJ = 0.15   # generous vs. the old sign-only hack; observed range was -8%..+14%
+
+# ── Small-sample shrinkage on the defender's allowed rate ────────────────────
+# MEASURED 2026-09-21, and the reason this input is not simply switched on.
+#
+# The sheet changes what it means mid-season. Pre-season it carries each
+# defender's FULL PRIOR SEASON (~386 coverage routes, allowed F/R sd 0.068);
+# once games are played it switches to SEASON-TO-DATE, so in September each
+# number rests on one game (~28 routes, sd 0.221). Same column, wildly
+# different reliability, and nothing in the sheet says so.
+#
+# Those two sheets measure the SAME 77 defenders, which is a direct reliability
+# test: correlation between a defender's one-game number and his own full-season
+# number is -0.12. A one-game allowed F/R carries no usable signal at all.
+#
+# Splitting the variance (observed = true + noise/n) over those two samples:
+#   noise variance   1.335        true between-defender variance  0.0012
+#   -> k = noise/true = ~1,145 routes, rounded to 1,100 below.
+# Weight on the observed number is routes/(routes + k):
+#   28 routes (one game)      3%      386 routes (a full season)   26%
+# So in September the factor sits near neutral and earns influence only as real
+# coverage volume accumulates, which is exactly the intent.
+#
+# THAT 26% CEILING IS NOT A BUG. It says most of the spread between defenders
+# in allowed F/R is noise even across a full season (true sd ~0.034 against an
+# observed 0.068) — consistent with the known confound that this stat barely
+# separates good corners from bad, since a corner who travels with WR1s is
+# measured against the league's best receivers. Do NOT raise this to make the
+# adjustment "do more"; re-derive it from a fresh reliability test instead.
+WR_CB_SHRINK_ROUTES = 1100
 
 # LIMITATION: the sheet's key says 'S' marks projected SHADOW coverage, but in
 # the parsed text 'S' is the alignment code for slot (the L/S/R pairing across
@@ -375,6 +404,19 @@ def wr_cb_factor(player_name: str, opponent: str, wr_cb_rows: list) -> tuple[flo
         except (TypeError, ValueError):
             return 1.0, ""
 
+        # Shrink toward the league average by how many coverage routes actually
+        # back this number — see WR_CB_SHRINK_ROUTES. The baseline is the
+        # SHEET'S OWN mean where available rather than a hardcoded constant,
+        # because the sheet re-derives its league averages every week (measured:
+        # 0.650 pre-season vs 0.670 after Week 1).
+        league_fr = row.get("_league_fr") or LEAGUE_AVG_ALLOWED_FR
+        try:
+            routes = float(row.get("cov_routes") or 0)
+        except (TypeError, ValueError):
+            routes = 0.0
+        weight = routes / (routes + WR_CB_SHRINK_ROUTES)
+        def_fr = weight * def_fr + (1 - weight) * league_fr
+
         # How often these two actually face each other. Offense's left side
         # lines up against the defense's right, hence LWR<->RCB / RWR<->LCB.
         exposure = (_pct(row.get("lwr_pct")) * _pct(row.get("rcb_pct"))
@@ -385,11 +427,12 @@ def wr_cb_factor(player_name: str, opponent: str, wr_cb_rows: list) -> tuple[flo
 
         # Defender half of ESPN's matchup formula only — the receiver half is
         # already in our baseline (see the block comment above).
-        defender_delta = (def_fr - LEAGUE_AVG_ALLOWED_FR) / LEAGUE_AVG_ALLOWED_FR
+        defender_delta = (def_fr - league_fr) / league_fr
         adj = max(-WR_CB_MAX_ADJ, min(WR_CB_MAX_ADJ, exposure * defender_delta))
         defender = row.get("defender", "?")
         return 1.0 + adj, (f"vs {defender} ({exposure*100:.0f}% of routes, "
-                           f"{def_fr:.2f} F/R allowed) {adj*100:+.1f}%")
+                           f"{def_fr:.2f} F/R allowed, {weight*100:.0f}% weight "
+                           f"on {routes:.0f} routes) {adj*100:+.1f}%")
     return 1.0, ""
 
 

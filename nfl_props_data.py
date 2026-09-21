@@ -455,4 +455,20 @@ def load_wr_cb_matchups(pdf_path: str = WR_CB_PDF_PATH) -> list[dict]:
                         t = str(d.get(col) or "").strip().upper()
                         d[col] = WR_CB_TEAM_ALIASES.get(t, t)
                     rows.append(d)
+
+    # Carry THIS SHEET's own league-average allowed F/R on every row. The sheet
+    # re-derives its league averages weekly (0.650 pre-season vs 0.670 after
+    # Week 1), so a hardcoded constant would drift; and the shrinkage in
+    # wr_cb_factor needs a baseline to shrink toward. Attached to each row so
+    # the function signature stays unchanged.
+    frs = []
+    for r in rows:
+        try:
+            frs.append(float(r.get("cov_fr")))
+        except (TypeError, ValueError):
+            pass
+    if frs:
+        league_fr = sum(frs) / len(frs)
+        for r in rows:
+            r["_league_fr"] = league_fr
     return rows
