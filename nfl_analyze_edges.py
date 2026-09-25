@@ -23,7 +23,14 @@ NFL_SHEET_ID   = "1UPempH9iWF-DQFh5d26zjpft3-XLehp30PZPfE0tpsE"
 # (service account only has Viewer access here, which is all we need since
 # we never write to it). Confirmed 2026-07-04 to refresh all season, not just
 # preseason, so it's a valid ongoing input for prop projections in Step 3.
-ORGANIC_SHEET_ID = "1HoxQZOsM0LFzHxEqCGv5yQJKa_ifdzasZoEHkMGVItQ"
+# Player-prop projections. WEEKLY_PROJ_SHEET_ID is the live source as of
+# 2026-09-25: "Weekly Fantasy Football Projections", PER-GAME numbers with an
+# Opp column, refreshed weekly. It replaced ORGANIC_SHEET_ID ("Draft Fantasy
+# Football Projections"), which carried SEASON totals and had not refreshed
+# since 2026-09-09 — see load_organic_baselines for the full reasoning. The old
+# id is kept only because historical Bet History rows were priced off it.
+WEEKLY_PROJ_SHEET_ID = "1R7HBUls8QdlS0HQ_Xu4WBmZFHgt2DYdhR4JSeNjW0yM"
+ORGANIC_SHEET_ID = "1HoxQZOsM0LFzHxEqCGv5yQJKa_ifdzasZoEHkMGVItQ"   # RETIRED
 CREDS_FILE     = os.path.join(os.path.dirname(__file__), "google_credentials.json")
 
 SCOPES = [
@@ -277,35 +284,9 @@ def stars_emoji(n: int) -> str:
     return "⭐" * n
 
 
-# ── Organic sheet reader (Joe Bond's consensus fantasy projections) ──────────
-def load_organic_projections(gc) -> dict:
-    """
-    Read the blended consensus season projections from Joe's
-    'Draft Fantasy Football Projections' sheet (LIVE PROJECTIONS tabs).
-    Returns {player_name: {stat_dict}} per position group.
-
-    Step 3 will convert these season totals to per-game baselines (÷ ~17
-    games) and blend them with in-season nflverse actuals as the season
-    progresses (recency-weighted, same philosophy as MLB park factors).
-    """
-    sh = gc.open_by_key(ORGANIC_SHEET_ID)
-    projections = {}
-    for pos, tab in [
-        ("QB", "LIVE PROJECTIONS QB"),
-        ("RB", "LIVE PROJECTIONS RB"),
-        ("WR", "LIVE PROJECTIONS WR"),
-        ("TE", "LIVE PROJECTIONS TE"),
-    ]:
-        try:
-            rows = sheet_to_dicts(sh.worksheet(tab))
-        except gspread.exceptions.WorksheetNotFound:
-            print(f"  [warn] '{tab}' not found in organic sheet — skipping {pos}")
-            continue
-        for row in rows:
-            name = row.get(pos, "").strip()
-            if name:
-                projections[name] = {"position": pos, **row}
-    return projections
+# (load_organic_projections removed 2026-09-25. It read the retired season-total
+# sheet into a variable main() never used. The props engine reads the weekly
+# per-game sheet directly — props_model.load_organic_baselines.)
 
 
 def _shrink(team_avg: float, league_avg: float, n_games: int, k: float) -> float:
@@ -1268,14 +1249,10 @@ def main():
         print("\nDone (snapshot-only).")
         return
 
-    print("\nLoading organic projections sheet ...")
-    try:
-        organic = load_organic_projections(gc)
-        print(f"  {len(organic)} players loaded from consensus projections")
-    except Exception as e:
-        print(f"  [warn] could not load organic sheet: {e}")
-        organic = {}
-
+    # (The projections sheet is read by the props engine itself — see
+    # props_model.load_organic_baselines. A second read here loaded a variable
+    # nothing used, and after the 2026-09-25 source switch it was reading the
+    # RETIRED sheet on every run.)
     print("\nLoading nflverse team stats (2025 prior, regressed to mean) ...")
     team_stats = load_team_stats()
     print(f"  League avg PPG: {team_stats['_league_avg']}")

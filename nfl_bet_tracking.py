@@ -74,7 +74,8 @@ MIN_STARS_TO_TRACK = 3
 # old model and the 21:48 run that evening was the new one.
 MODEL_PREFIX = "pre-fix"        # broken prop calibration, loose role band
 MODEL_CALIB = "calib-only"      # calibration fixed, band not yet tightened
-CURRENT_MODEL = "current"       # both fixes live — the model we run today
+MODEL_SEASON_PROJ = "season-proj"   # both fixes live, SEASON-total projections
+CURRENT_MODEL = "weekly-proj"       # per-game weekly projections — today's model
 
 
 def model_cohort(entry_date: str, entry_run: str) -> str:
@@ -84,6 +85,11 @@ def model_cohort(entry_date: str, entry_run: str) -> str:
         return MODEL_PREFIX
     if stamp < "2026-09-08 21:58":
         return MODEL_CALIB
+    # 2026-09-25: player props moved from season totals (stale since 09-09,
+    # divided by an assumed games-played) to per-game weekly projections. Every
+    # prop is priced differently after this, so the two cannot share a record.
+    if stamp < "2026-09-25 12:00":
+        return MODEL_SEASON_PROJ
     return CURRENT_MODEL
 
 

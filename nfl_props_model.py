@@ -53,7 +53,12 @@ import nfl_analyze_edges as edges
 # Re-derive this from 2026 actuals once a real season exists — rerun the same
 # comparison (organic season total / X vs. nflverse per-game actual) and reset
 # X to whatever makes the median 1.00.
-EXPECTED_GAMES_PLAYED = 15.5
+# RETIRED 2026-09-25 — no longer used anywhere in the projection path. The
+# weekly sheet supplies PER-GAME numbers, so there is nothing to divide. Kept
+# only so the reasoning below stays readable and nobody reintroduces a divisor
+# out of habit. If a future source reverts to season totals, that source must
+# carry its own divisor; do not resurrect this one.
+EXPECTED_GAMES_PLAYED = None
 
 # ASSUMPTION STILL OPEN: the user confirmed the organic sheet refreshes all
 # season. If those refreshes become REST-OF-SEASON totals once games are played
@@ -98,13 +103,18 @@ EXPECTED_GAMES_PLAYED = 15.5
 # against an input that re-levels itself weekly is stale the moment it lands;
 # measuring it each run is the only version that cannot silently drift.
 #
-# Values below re-derived 2026-09-08 against the post-refresh sheet.
+# RESET TO NEUTRAL 2026-09-25 with the switch to per-game weekly projections.
+# The previous values (0.906-1.074) were measured against SEASON totals divided
+# by EXPECTED_GAMES_PLAYED — a completely different basis, so carrying them over
+# would apply a correction derived for arithmetic the model no longer does.
+# Neutral is the honest starting point; calibrate_to_market() measures the real
+# level against posted lines on the first run and every run after.
 PROP_CALIBRATION = {
-    "pass_yds":   0.913,
-    "pass_tds":   0.906,
-    "rush_yds":   1.074,
-    "rec_yds":    1.060,
-    "receptions": 0.945,
+    "pass_yds":   1.0,
+    "pass_tds":   1.0,
+    "rush_yds":   1.0,
+    "rec_yds":    1.0,
+    "receptions": 1.0,
 }
 
 # Anytime TD is deliberately NOT calibrated — see the block in
@@ -278,7 +288,11 @@ WR_CB_SHRINK_ROUTES = 1100
 
 # Organic sheet uses the "LAR" abbreviation for the Rams; nflverse (and
 # therefore every other table in this model) uses "LA".
-ORGANIC_TEAM_FIXES = {"LAR": "LA"}
+# The weekly sheet abbreviates three teams differently from nflverse. Same
+# class of bug as the WR-CB sheet's ARZ/BLT/CLV/HST/LAR: team codes are matched
+# by exact string, so an unmapped code silently drops that team's players.
+# Derived by diffing the two code sets, not guessed.
+ORGANIC_TEAM_FIXES = {"LAR": "LA", "WSH": "WAS", "JAC": "JAX", "KCC": "KC"}
 
 # Which organic-sheet column and which defense-vs-position factor drive each
 # prop. (organic_col, dvp_position_group, dvp_stat)
@@ -307,24 +321,47 @@ def _damped(factor: float, damping: float) -> float:
 
 
 # ── Baseline loading ──────────────────────────────────────────────────────────
-def load_organic_baselines(gc, name_map: dict) -> dict:
+def load_organic_baselines(gc, name_map: dict, opponents: dict | None = None) -> dict:
     """
-    Read the organic consensus sheet into per-player SEASON totals keyed by
-    gsis player_id, with the raw name kept for reporting.
+    Read the weekly projections sheet into PER-GAME baselines keyed by gsis
+    player_id, with the raw name kept for reporting.
+
+    SOURCE CHANGED 2026-09-25 (owner): from "Draft Fantasy Football Projections"
+    (season totals, last refreshed 09-09) to "Weekly Fantasy Football
+    Projections" (per-game, refreshed weekly). This is strictly better:
+      * PER-GAME numbers remove EXPECTED_GAMES_PLAYED from the model entirely.
+        That divisor was known to be imprecise, differed by stat, and carried a
+        standing risk that the source would switch to rest-of-season totals and
+        silently shrink every projection week over week. Gone.
+      * Refreshed weekly, so it finally reflects injuries and role changes. The
+        old sheet had been frozen since five minutes into the Week 1 opener.
+      * Carries an Opp column, so a stale sheet can be DETECTED rather than
+        quietly projecting last week's matchups.
+    Validated on switch: 99.3% name join (453/456), team agrees with nflverse
+    rosters on all 453, all 16 of that week's matchups present, and 94.4% of
+    book-priced players covered (the misses are fullbacks and deep backups the
+    role gate discards anyway).
 
     Players who can't be resolved to an id are still returned (keyed by their
     normalized name) rather than dropped — a book may well offer a prop on
     someone nflverse hasn't rostered yet, and silently losing them is exactly
     the failure mode that broke MLB props. `id_resolved` marks which is which.
+
+    `opponents` is {team_abbr: opponent_abbr} for the slate being priced. When
+    given, a row whose Opp disagrees is SKIPPED: that means the sheet has not
+    been refreshed for this week, and last week's matchup is not a projection
+    for this one. Silence is the danger here — see the WR-CB sheet, which sat
+    stale for two weeks contributing nothing while reporting itself fine.
     """
-    sh = gc.open_by_key(edges.ORGANIC_SHEET_ID)
+    sh = gc.open_by_key(edges.WEEKLY_PROJ_SHEET_ID)
     out = {}
+    stale = 0
     for pos, tab in (("QB", "LIVE PROJECTIONS QB"), ("RB", "LIVE PROJECTIONS RB"),
                      ("WR", "LIVE PROJECTIONS WR"), ("TE", "LIVE PROJECTIONS TE")):
         try:
             rows = edges.sheet_to_dicts(sh.worksheet(tab))
         except Exception as e:
-            print(f"  [warn] organic tab '{tab}' unreadable: {e}")
+            print(f"  [warn] projections tab '{tab}' unreadable: {e}")
             continue
         for row in rows:
             name = (row.get(pos) or "").strip()
@@ -332,9 +369,14 @@ def load_organic_baselines(gc, name_map: dict) -> dict:
                 continue
             team = (row.get("Team") or "").strip().upper()
             team = ORGANIC_TEAM_FIXES.get(team, team)
+            opp = ORGANIC_TEAM_FIXES.get((row.get("Opp") or "").strip().upper(), "")
+            if opponents and team in opponents and opp and opponents[team] != opp:
+                stale += 1
+                continue
             pid = props_data.resolve_player_id(name, name_map)
             key = pid or f"name:{props_data.normalize_name(name)}"
             out[key] = {
+                "opponent_sheet": opp,
                 "player_id": pid,
                 "id_resolved": pid is not None,
                 "name": name,
@@ -349,6 +391,9 @@ def load_organic_baselines(gc, name_map: dict) -> dict:
                 "rec_tds":  _f(row.get("Rec TD")),
                 "targets":  _f(row.get("Targets")),
             }
+    if stale:
+        print(f"  [check] {stale} projection row(s) skipped — their Opp disagrees "
+              f"with this week's schedule, i.e. the sheet is not refreshed")
     return out
 
 
@@ -461,8 +506,11 @@ def project_player_props(baseline: dict, opponent: str, proj_team_score: float,
     """
     Project every applicable prop category for one player in one game.
 
-    projection = (season total / 17) x script_factor x matchup_factor
+    projection = per-game baseline x script_factor x matchup_factor
     and, for pass-catchers, x wr_cb_factor.
+
+    The baseline arrives PER GAME from the weekly sheet (see
+    load_organic_baselines), so there is no games-played divisor any more.
 
     Anytime TD is modelled separately via Poisson — see below.
     """
@@ -482,8 +530,8 @@ def project_player_props(baseline: dict, opponent: str, proj_team_score: float,
     }
 
     for prop, (_, spec_pos, stat) in PROP_SPECS.items():
-        season_total = baseline.get(prop, 0.0)
-        if season_total <= 0:
+        per_game = baseline.get(prop, 0.0)
+        if per_game <= 0:
             continue
         # Position-specific props only apply to that position; receiving props
         # use the player's own position group so a RB's receptions are judged
@@ -499,10 +547,11 @@ def project_player_props(baseline: dict, opponent: str, proj_team_score: float,
             group = "RB"  # no separate QB-rush split; RB rushing is the closest proxy
 
         mf = matchup_factor(dvp, opponent, group, stat)
-        # Divide out the consensus sheet's stat-specific optimism (see
-        # PROP_CALIBRATION above). Level correction only — relative differences
-        # between players are preserved.
-        base = season_total / EXPECTED_GAMES_PLAYED / PROP_CALIBRATION.get(prop, 1.0)
+        # Already per game — no games-played divisor. PROP_CALIBRATION is a
+        # level correction only (relative differences between players are
+        # preserved) and is now just a fallback: calibrate_to_market() measures
+        # the real one against the posted lines every run.
+        base = per_game / PROP_CALIBRATION.get(prop, 1.0)
         value = base * script * mf
         if prop in ("rec_yds", "receptions"):
             value *= wr_cb_mult
@@ -519,21 +568,22 @@ def project_player_props(baseline: dict, opponent: str, proj_team_score: float,
     # Base lambda comes from the consensus TD projections (rush + receiving),
     # which already encode role and goal-line usage, then gets the same script
     # and matchup treatment as everything else.
-    season_tds = baseline.get("rush_tds", 0.0) + baseline.get("rec_tds", 0.0)
-    if season_tds > 0:
+    game_tds = baseline.get("rush_tds", 0.0) + baseline.get("rec_tds", 0.0)
+    if game_tds > 0:
         td_group = "RB" if pos in ("RB", "QB") else pos
         rush_mf = matchup_factor(dvp, opponent, "RB" if pos != "WR" else "WR", "rush_td")
         rec_mf = matchup_factor(dvp, opponent, td_group, "rec_td")
         # Weight the two matchup factors by how this player actually scores
-        rush_share = baseline.get("rush_tds", 0.0) / season_tds
+        rush_share = baseline.get("rush_tds", 0.0) / game_tds
         td_mf = rush_mf * rush_share + rec_mf * (1 - rush_share)
 
-        lam = (season_tds / EXPECTED_GAMES_PLAYED) * script * td_mf
+        # game_tds is already this game's expected TDs, so it IS lambda.
+        lam = game_tds * script * td_mf
         if pos in ("WR", "TE"):
             lam *= wr_cb_mult
         out["props"]["anytime_td"] = {
             "projection": round(1 - math.exp(-lam), 4),  # probability, not a count
-            "baseline_per_game": round(season_tds / EXPECTED_GAMES_PLAYED, 3),
+            "baseline_per_game": round(game_tds, 3),
             "matchup_factor": round(td_mf, 3),
             "expected_tds": round(lam, 3),
         }
@@ -1045,9 +1095,18 @@ def project_slate(gc, games_by_id: dict, team_stats: dict, rest_lookup: dict,
     print(f"  WR-CB matchup rows: {len(wr_cb_rows)}"
           + ("" if wr_cb_rows else "  (no weekly PDF present — using position-group matchups only)"))
 
-    baselines = load_organic_baselines(gc, name_map)
+    # Who each team actually plays on THIS slate, so a projection row carrying
+    # last week's opponent can be spotted and skipped rather than silently used.
+    opponents = {}
+    for g in games_by_id.values():
+        h = edges.TEAM_NAME_TO_ABBR.get(g["home_team"])
+        a = edges.TEAM_NAME_TO_ABBR.get(g["away_team"])
+        if h and a:
+            opponents[h], opponents[a] = a, h
+
+    baselines = load_organic_baselines(gc, name_map, opponents)
     unresolved = [b["name"] for b in baselines.values() if not b["id_resolved"]]
-    print(f"  Organic baselines: {len(baselines)} players "
+    print(f"  Weekly projections: {len(baselines)} players "
           f"({len(unresolved)} unmatched to a player id)")
 
     # team -> list of that team's baselines, for fast per-game lookup
