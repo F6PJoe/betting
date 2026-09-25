@@ -38,7 +38,13 @@ SEARCH_ROOTS = [
     os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop", "Main Slate Files"),
     os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop", "Showdown Files"),
 ]
-NAME_HINTS = ("wr-cb", "wr cb", "wrcb")
+
+# Deliberately loose: any PDF whose name mentions both WR and CB. The file gets
+# named differently week to week ("wr-cb-matchup.pdf", "WR-CB Matchup Main Slate
+# Week 2.pdf", "WR vs CB Matchups Week 3.pdf"), and an exact-phrase list missed
+# the third of those. Over-matching is harmless — every candidate is parsed and
+# checked against this week's actual games below, which is the real filter. A
+# name test that silently skips the right file is the expensive kind of wrong.
 
 
 def upcoming_week_games(season: int) -> tuple[int, set]:
@@ -62,7 +68,8 @@ def candidates() -> list[str]:
             continue
         for dirpath, _, files in os.walk(root):
             for f in files:
-                if f.lower().endswith(".pdf") and any(h in f.lower() for h in NAME_HINTS):
+                low = f.lower()
+                if low.endswith(".pdf") and "wr" in low and "cb" in low:
                     out.append(os.path.join(dirpath, f))
     return sorted(out, key=lambda p: os.path.getmtime(p), reverse=True)
 
