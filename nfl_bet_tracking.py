@@ -88,7 +88,13 @@ def model_cohort(entry_date: str, entry_run: str) -> str:
     # 2026-09-25: player props moved from season totals (stale since 09-09,
     # divided by an assumed games-played) to per-game weekly projections. Every
     # prop is priced differently after this, so the two cannot share a record.
-    if stamp < "2026-09-25 12:00":
+    # Boundary is the START of 09-25, not the hour of the switch: every row
+    # entered that day came from the new source (first new run 10:24, and no
+    # old-source run happened earlier that day — verified against Bet History
+    # and the Projection Log). An hour-precise boundary set to the wrong hour
+    # silently re-labels rows the next time cohorts are re-derived, which is
+    # worse than a day-precise one that is simply correct.
+    if stamp < "2026-09-25 00:00":
         return MODEL_SEASON_PROJ
     return CURRENT_MODEL
 
