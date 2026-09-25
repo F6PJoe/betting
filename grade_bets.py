@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import os
 import time
 import sys
+import traceback
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "run_log.txt")
 _log_fh  = None
@@ -672,7 +673,14 @@ def rebuild_performance(gc):
     ws_perf   = get_ws(gc, "Performance")
 
     # ── Game Totals (official bets from Bet History) ──────────────────────────
-    hist_rows = ws_hist.get_all_values()
+    # Reads go through sheets_call for the same reason the writes below do. Google
+    # allows 60 reads/min per user, and by the time this runs grade_bets has already
+    # graded five tabs. An unprotected read here raises a 429 straight into the
+    # caller's except block, which logs and continues — so the Performance tab simply
+    # stops updating while every other step succeeds. That is what happened from
+    # 2026-09-22: bets published daily, grading ran, and the tab sat three days stale
+    # until the audit's freshness check caught it.
+    hist_rows = sheets_call(ws_hist.get_all_values)
     if len(hist_rows) < 2:
         return
 
@@ -731,7 +739,7 @@ def rebuild_performance(gc):
             daily_tt[date] = daily_tt.get(date, 0.0) + u
 
     # ── ML / RL Shadow (excluding Missing SP rows) ────────────────────────────
-    sh_rows = ws_shadow.get_all_values()
+    sh_rows = sheets_call(ws_shadow.get_all_values)
     sh_hdr  = sh_rows[0] if sh_rows else []
     sh_data = sh_rows[1:] if len(sh_rows) > 1 else []
 
@@ -846,7 +854,7 @@ def rebuild_performance(gc):
 
     # ── Player Props (SP Strikeouts, Total Bases, Home Run, H+R+RBI) ─────────
     PROP_TYPES = ["SP Strikeouts", "Total Bases", "Home Run", "H+R+RBI"]
-    props_all_rows = ws_props.get_all_values() if ws_props else []
+    props_all_rows = sheets_call(ws_props.get_all_values) if ws_props else []
     props_hdr  = props_all_rows[0] if props_all_rows else []
     props_data = props_all_rows[1:] if len(props_all_rows) > 1 else []
 
@@ -1609,8 +1617,11 @@ def main():
     try:
         rebuild_performance(gc)
     except Exception as e:
-        log(f"  [ERROR] rebuild_performance failed: {e}")
-        errors.append(f"rebuild_performance failed: {e}")
+        # Full traceback: the one-line message told us nothing when this failed
+        # silently for three days, and CI logs are the only place it lands.
+        log(f"  [ERROR] rebuild_performance failed: {type(e).__name__}: {e}")
+        log(traceback.format_exc())
+        errors.append(f"rebuild_performance failed: {type(e).__name__}: {e}")
 
     log("\nVenue calibration report ...")
     try:
