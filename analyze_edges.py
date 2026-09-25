@@ -1031,13 +1031,32 @@ TOTAL_SCALE = [
 # the extreme bucket is 6 games. It is the reason the stake is small, not a reason
 # to re-split the tiers under a different name.
 #
-# Every qualifying GT bet is therefore published at one flat stake. 0.25u is
-# deliberately below the 0.3u floor of every unit scale in this file: those scales
-# express conviction tiers, and GT has none to express. It is sized to keep the bet
-# type live and accruing data, not because it is believed +EV.
-# Revisit when the Line History market test runs (early Sept) — see
-# capture_line_history() and project_gt_projection_rebuild.
-GT_FLAT_UNITS = 0.25
+# Every qualifying GT bet is therefore published at one flat stake.
+#
+# ── 2026-09-25 REVIEW: the stake is raised 0.25 -> 0.50 ──────────────────────
+# Flat staking survives; the 0.25 LEVEL does not. It was a penalty for the edge-decay
+# pattern above, and a full season reverses that pattern.
+#
+# What the season says (799 graded GT rows, chronological split at 2026-08-02):
+#   The 15% gate, which was written here BEFORE this data existed, validates
+#   out of sample: test half below 15% went 41.6% / -9.00u (p=0.015); at or above
+#   15% went 60.2% / +9.30u (p=0.005). A pre-registered rule confirmed on data it
+#   never saw is the strongest result this model has produced.
+#   Edge size above the gate still carries nothing: within the 15%+ group the
+#   correlation between edge size and winning is -0.0095 (p=0.896). So the tiers
+#   stay collapsed and the stake stays FLAT — that part of the 08-07 call was right.
+#   GT is also the only bet type whose projection adds anything the price does not:
+#   +0.0664 beyond the closing line (p=0.057, n=818), an estimate that barely moved
+#   from +0.0766 at n=615 three weeks earlier. Team Total's equivalent is +0.0227
+#   (p=0.653) — nothing — despite TT carrying the larger stake and the cheatsheet.
+#   Full-season official record: GT 266 bets, 56.4%, +7.8% ROI vs TT 642, 50.3%, +0.6%.
+#
+# Why 0.50 and not the 0.635 mean GT carried before the demotion: GT's ROI advantage
+# is p=0.210, so the SIZE of its edge is not established — only the gate is. 0.50 is
+# the floor of the normal qualifying range in this file (TT and ML both sit at 0.50-0.60),
+# so this ends a penalty rather than granting a promotion. Raise it only if the gate
+# keeps holding on 2027 data.
+GT_FLAT_UNITS = 0.50
 GT_FLAT_STARS = 4     # uniform label; 4 keeps GT flowing through the 4-star-minimum
                       # gates used by Bet History, the Edges tab and the cheatsheet.
 # ── Moneyline & Run Line are tracked with SEPARATE scales as of 2026-06-21 ──────
