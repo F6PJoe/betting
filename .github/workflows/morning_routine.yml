@@ -9,8 +9,20 @@ on:
   # rosters, bullpen usage or rest patterns.
   #
   # The schedule is commented out rather than deleted so the exact cadence that
-  # produced the season's record comes back verbatim next year. To restart, uncomment
-  # the cron and confirm the Odds API key and credit plan are still live.
+  # produced the season's record comes back verbatim next year.
+  #
+  # RESTARTING TAKES TWO STEPS, AND ONLY ONE OF THEM IS IN THIS REPO:
+  #   1. Uncomment the cron below (and the ones in afternoon_update.yml), then confirm
+  #      the Odds API key and credit plan are still live.
+  #   2. Re-enable the Google Apps Script trigger on the Cheat Sheet:
+  #      Extensions -> Apps Script -> Triggers (clock icon). It was deleted 2026-09-28
+  #      so the off-season notice on the sheet would not be cleared every morning.
+  #
+  # Step 2 is invisible from here. A sheet-bound Apps Script belongs to the owner's
+  # Google account, not the service account, so nothing in this repo — not the audit,
+  # not the credentials — can see whether it is on. Do step 1 without step 2 and the
+  # pipeline will run and write bets while the sheet behaves strangely, with no error
+  # anywhere to explain why.
   #   schedule:
   #     - cron: '0 12 * * *'   # 8:00 AM EDT (UTC-4); GitHub cron runs in UTC
   workflow_dispatch:         # manual trigger still available while dormant
