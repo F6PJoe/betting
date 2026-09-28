@@ -1186,7 +1186,42 @@ def sort_edge_rows(rows: list[list]) -> list[list]:
     return sorted(rows, key=key, reverse=True)
 
 
-def write_edges_tab(gc, edge_rows):
+def started_game_labels(games_by_id: dict) -> set:
+    """Labels of games whose kickoff has passed, in Edges' 'Game' format.
+
+    Matched by LABEL rather than by reading a time off the row: the Edges rows
+    carry only a formatted "Time (ET)" string with no date, and prop rows leave
+    it blank entirely, so the row cannot answer "has this started?" on its own.
+    """
+    now = datetime.now(timezone.utc)
+    started = set()
+    for g in games_by_id.values():
+        ct = str(g.get("commence_time") or "")
+        try:
+            ko = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if ko.tzinfo is None:
+            ko = ko.replace(tzinfo=timezone.utc)
+        if ko <= now:
+            started.add(f"{g['away_team']} @ {g['home_team']}")
+    return started
+
+
+def write_edges_tab(gc, edge_rows, started: set | None = None):
+    # DROP GAMES ALREADY UNDERWAY (2026-09-28, owner request). Edges is the
+    # "what looks good right now" board, and a game that has kicked off cannot
+    # be bet — leaving it there pads the board with rows that are not decisions
+    # and makes a stale tab look like a live one. The odds tab holds the whole
+    # week including played games, which is why they appeared at all.
+    # Bet History is unaffected: it keeps every tracked bet for grading and CLV.
+    if started:
+        before = len(edge_rows)
+        gi = EDGES_HEADER.index("Game")
+        edge_rows = [r for r in edge_rows if str(r[gi]) not in started]
+        if before != len(edge_rows):
+            print(f"  Edges: dropped {before - len(edge_rows)} row(s) on "
+                  f"{len(started)} game(s) already kicked off")
     edge_rows = sort_edge_rows(edge_rows)
     w = ws(gc, NFL_SHEET_ID, "Edges", header=EDGES_HEADER)
     w.clear()
@@ -1394,7 +1429,8 @@ def main():
                   "per-stat divisor recalibration (see PROPS_TRACKING_ENABLED)")
 
     # ── Edges tab: the LIVE view, cleared and rewritten every run ────────────
-    write_edges_tab(gc, edge_rows + prop_edge_rows)
+    write_edges_tab(gc, edge_rows + prop_edge_rows,
+                    started_game_labels(games_by_id))
 
     # ── Line Log: every distinct line on the market, all games, every run ────
     n_lines = tracking.append_line_log(gc, games_by_id, prop_rows=prop_rows or None)
