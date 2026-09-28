@@ -364,7 +364,6 @@ def rebuild_performance(gc) -> int:
         return c or tracking.model_cohort(r.get("Entry Date"), r.get("Entry Run"))
 
     graded = [r for r in all_graded if cohort(r) == tracking.CURRENT_MODEL]
-    retired = [r for r in all_graded if cohort(r) != tracking.CURRENT_MODEL]
 
     # ── Weekly ledger ────────────────────────────────────────────────────────
     # Grouped by the game's NFL WEEK, taken from the schedule — not by entry
@@ -428,7 +427,13 @@ def rebuild_performance(gc) -> int:
             b["w"] += res == "Win"
             b["l"] += res == "Loss"
             b["p"] += res == "Push"
-            b["staked"] += tracking._num(r.get("Entry Units"), 0) or 0
+            # Staked counts DECIDED bets only. A push or a void returns the
+            # stake, so including it inflates the ROI denominator and quietly
+            # understates ROI. The TOTAL banner and the weekly ledger already
+            # counted it this way; this block did not, which put 69.30 against
+            # the banner's 67.80 on the same tab for the same bets.
+            if res in ("Win", "Loss"):
+                b["staked"] += tracking._num(r.get("Entry Units"), 0) or 0
             b["res"] += tracking._num(r.get("Units Result"), 0) or 0
             for col, dest in (("CLV Line", "clv_l"), ("CLV Price %", "clv_p")):
                 v = tracking._num(r.get(col))
@@ -472,16 +477,37 @@ def rebuild_performance(gc) -> int:
         return ["TOTAL", txt] + [""] * (len(PERFORMANCE_HEADER) - 2)
 
     primary = [r for r in graded if str(r.get("Is Primary", "")).upper() == "TRUE"]
-    retired_primary = [r for r in retired if str(r.get("Is Primary", "")).upper() == "TRUE"]
-    retired_note = ""
-    if retired_primary:
-        rw = sum(1 for r in retired_primary if r["Result"] == "Win")
-        rl = sum(1 for r in retired_primary if r["Result"] == "Loss")
-        rres = sum(tracking._num(r.get("Units Result"), 0) or 0 for r in retired_primary)
-        retired_note = (f"EXCLUDED: {rw}-{rl}, {rres:+.2f} units from "
-                        f"{len(retired_primary)} bets made before the 2026-09-08 "
-                        f"fixes, by a model no longer in use. Still in Bet History, "
-                        f"tagged in the 'Model' column.")
+
+    def totals_row(body: list[list], subset: list[dict]) -> list:
+        """
+        Numeric total under the by-type block.
+
+        D-G and I-J are summed straight off the rows above, so the row visibly
+        adds up to what is printed. H and K are RECOMPUTED from those sums
+        rather than averaged down the column — a mean of per-bucket win rates
+        or ROIs weights a 1-bet bucket the same as a 40-bet one and is simply
+        the wrong number.
+
+        L-M likewise come from the underlying bets, not from averaging the
+        per-row averages, for the same reason.
+        """
+        def col(i):
+            return sum(float(r[i]) for r in body if str(r[i]).strip() != "")
+
+        bets, wins, losses, pushes = col(3), col(4), col(5), col(6)
+        staked, res = col(8), col(9)
+        decided = wins + losses
+        clv_l = [v for r in subset if (v := tracking._num(r.get("CLV Line"))) is not None]
+        clv_p = [v for r in subset if (v := tracking._num(r.get("CLV Price %"))) is not None]
+        return [
+            "TOTAL", "all bet types above", "",
+            int(bets), int(wins), int(losses), int(pushes),
+            round(wins / decided * 100, 1) if decided else "",
+            round(staked, 2), round(res, 3),
+            round(res / staked * 100, 1) if staked else "",
+            round(sum(clv_l) / len(clv_l), 3) if clv_l else "",
+            round(sum(clv_p) / len(clv_p), 3) if clv_p else "",
+        ]
 
     # TWO TABS, NOT TWO BLOCKS ON ONE TAB (2026-09-21). Both scopes used to be
     # stacked in a single sheet, so adding up the Units Result column returned
@@ -505,8 +531,6 @@ def rebuild_performance(gc) -> int:
         grid = [PERFORMANCE_HEADER,
                 total_line(scope, subset),
                 ["", note] + pad]
-        if retired_note:
-            grid.append(["", retired_note] + pad)
 
         # Weekly ledger, on the headline tab only (2026-09-28, owner request).
         # It covers EVERY cohort, so it does not match the TOTAL banner above,
@@ -525,7 +549,10 @@ def rebuild_performance(gc) -> int:
                                  "different sets. Adding the units column down the "
                                  "whole tab double-counts; the TOTAL row is the "
                                  "figure to read."] + pad)
-        grid += summarise(scope, subset)
+        body = summarise(scope, subset)
+        grid += body
+        if body:
+            grid.append(totals_row(body, subset))
         tracking.safe_rewrite(w, grid)          # never clear-then-write
         # FIXED 2 DECIMALS on every money/rate column (owner request 2026-09-28).
         # The stored numbers keep full precision — only the display is pinned —
@@ -537,7 +564,7 @@ def rebuild_performance(gc) -> int:
             w, PERFORMANCE_HEADER,
             ["Units Staked", "Units Result", "ROI %", "Avg CLV Line",
              "Avg CLV Price %"], pattern="0.00")
-        written += len(grid) - (4 if retired_note else 3)
+        written += len(body)
     return written
 
 
