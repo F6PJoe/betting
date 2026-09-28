@@ -1,9 +1,19 @@
 name: MLB Morning Routine
 
 on:
-  schedule:
-    - cron: '0 12 * * *'   # 8:00 AM EDT (UTC-4); GitHub cron runs in UTC
-  workflow_dispatch:         # also allows manual trigger
+  # ── OFF-SEASON 2026-09-28 ────────────────────────────────────────────────────
+  # The 2026 regular season ended 2026-09-27 and the model is shut down for the year.
+  # Final record: 591-568-11, +1.08 units on 676.9 staked (ROI +0.16%), 2026-06-02
+  # to 2026-09-27. Postseason is deliberately NOT bet: the model was fitted on
+  # regular-season run environments and nothing in it was validated against playoff
+  # rosters, bullpen usage or rest patterns.
+  #
+  # The schedule is commented out rather than deleted so the exact cadence that
+  # produced the season's record comes back verbatim next year. To restart, uncomment
+  # the cron and confirm the Odds API key and credit plan are still live.
+  #   schedule:
+  #     - cron: '0 12 * * *'   # 8:00 AM EDT (UTC-4); GitHub cron runs in UTC
+  workflow_dispatch:         # manual trigger still available while dormant
 
 env:
   TZ: America/New_York      # so datetime.now() in Python returns Eastern time
