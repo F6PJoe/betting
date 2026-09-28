@@ -350,6 +350,50 @@ def grade_bet_history(gc) -> dict:
     return {"graded": graded, "awaiting": awaiting, "unmatched": unmatched}
 
 
+def _highlight_total_row(worksheet, row_idx: int | None) -> None:
+    """
+    Bold + yellow on the TOTAL row, applied by CODE rather than by hand.
+
+    WHY IT CANNOT BE MANUAL (2026-09-28): the owner formatted it in the sheet,
+    but cell formatting stays pinned to a row NUMBER while this row moves — the
+    weekly ledger above it gains a row every week. Their highlight had already
+    come adrift onto an ordinary data row by the next rebuild.
+
+    So the whole data range is reset to plain first and the highlight re-applied
+    wherever the row now sits. Resetting is the half that matters: without it
+    every old position keeps its yellow and the tab ends up striped.
+
+    Yellow is RGB(1,1,0) — read off the owner's own formatting rather than
+    guessed at, so it matches what they chose.
+    """
+    if row_idx is None:
+        return
+    ncols = len(PERFORMANCE_HEADER)
+    plain = {"backgroundColor": {"red": 1, "green": 1, "blue": 1},
+             "textFormat": {"bold": False}}
+    reqs = [
+        {"repeatCell": {
+            "range": {"sheetId": worksheet.id, "startRowIndex": 1,
+                      "startColumnIndex": 0, "endColumnIndex": ncols},
+            "cell": {"userEnteredFormat": plain},
+            "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold",
+        }},
+        {"repeatCell": {
+            "range": {"sheetId": worksheet.id,
+                      "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
+                      "startColumnIndex": 0, "endColumnIndex": ncols},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": {"red": 1, "green": 1, "blue": 0},
+                "textFormat": {"bold": True}}},
+            "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold",
+        }},
+    ]
+    try:
+        worksheet.spreadsheet.batch_update({"requests": reqs})
+    except Exception as e:
+        print(f"  [warn] could not highlight the TOTAL row: {e}")
+
+
 def rebuild_performance(gc) -> int:
     """
     Rebuild the performance tabs from graded rows.
@@ -397,14 +441,22 @@ def rebuild_performance(gc) -> int:
         week_of = {}
 
     def weekly(subset):
+        # SPLIT BY WEEK *AND* MODEL, not week alone. Blending them hid that
+        # Week 3's +5.66 was mostly 12 bets from the retired model on the
+        # Thursday game, while the current model's own first outing was roughly
+        # flat. Dropping the old rows instead would blank Weeks 1-2 entirely —
+        # there are no current-model bets in them — and lose real history for
+        # no gain, since the headline record above already excludes them.
         buckets = {}
         for r in subset:
             home, away = _teams_from_label(r.get("Game", ""))
             wk = week_of.get((home, away))
             if wk is None:
                 continue
-            b = buckets.setdefault(wk, {"w": 0, "l": 0, "p": 0, "staked": 0.0,
-                                        "res": 0.0, "models": set()})
+            tag = ("current model" if cohort(r) == tracking.CURRENT_MODEL
+                   else "retired model")
+            b = buckets.setdefault((wk, tag), {"w": 0, "l": 0, "p": 0, "staked": 0.0,
+                                               "res": 0.0, "models": set()})
             res = str(r.get("Result", ""))
             b["w"] += res == "Win"
             b["l"] += res == "Loss"
@@ -416,11 +468,12 @@ def rebuild_performance(gc) -> int:
             b["res"] += tracking._num(r.get("Units Result"), 0) or 0
             b["models"].add(cohort(r))
         out = []
-        for wk in sorted(buckets):
-            b = buckets[wk]
+        # current model first within each week — it is the one that matters now
+        for wk, tag in sorted(buckets, key=lambda k: (k[0], k[1] != "current model")):
+            b = buckets[(wk, tag)]
             decided = b["w"] + b["l"]
             out.append([
-                f"Week {wk}", ", ".join(sorted(b["models"])), "",
+                f"Week {wk}", f"{tag} ({', '.join(sorted(b['models']))})", "",
                 decided + b["p"], b["w"], b["l"], b["p"],
                 round(b["w"] / decided, 4) if decided else "",
                 round(b["staked"], 2), round(b["res"], 3),
@@ -496,8 +549,8 @@ def rebuild_performance(gc) -> int:
         """
         Numeric total under the by-type block.
 
-        D-G and I-J are summed straight off the rows above, so the row visibly
-        adds up to what is printed. H and K are RECOMPUTED from those sums
+        D-G and I-J are summed straight off the by-type rows, so the row
+        visibly adds up to what is printed. H and K are RECOMPUTED from those sums
         rather than averaged down the column — a mean of per-bucket win rates
         or ROIs weights a 1-bet bucket the same as a 40-bet one and is simply
         the wrong number.
@@ -514,7 +567,7 @@ def rebuild_performance(gc) -> int:
         clv_l = [v for r in subset if (v := tracking._num(r.get("CLV Line"))) is not None]
         clv_p = [v for r in subset if (v := tracking._num(r.get("CLV Price %"))) is not None]
         return [
-            "TOTAL", "all bet types above", "",
+            "TOTAL", "all bet types below", "",
             int(bets), int(wins), int(losses), int(pushes),
             round(wins / decided, 4) if decided else "",
             round(staked, 2), round(res, 3),
@@ -563,10 +616,15 @@ def rebuild_performance(gc) -> int:
                                  "different sets. Adding the units column down the "
                                  "whole tab double-counts; the TOTAL row is the "
                                  "figure to read."] + pad)
+        # TOTAL sits at the TOP of the by-type block, not the bottom (owner
+        # request 2026-09-28). The weekly ledger above gains a row every week,
+        # so a total pinned to the bottom drifts further off-screen all season.
         body = summarise(scope, subset)
-        grid += body
+        total_at = None
         if body:
+            total_at = len(grid)          # 0-based row index of the TOTAL row
             grid.append(totals_row(body, subset))
+        grid += body
         tracking.safe_rewrite(w, grid)          # never clear-then-write
         # FIXED 2 DECIMALS on every money/rate column (owner request 2026-09-28).
         # The stored numbers keep full precision — only the display is pinned —
@@ -578,6 +636,7 @@ def rebuild_performance(gc) -> int:
                                       PERFORMANCE_NUM_COLS, pattern="0.00")
         tracking._pin_numeric_formats(w, PERFORMANCE_HEADER,
                                       PERFORMANCE_PCT_COLS, pattern="0.00%")
+        _highlight_total_row(w, total_at)
         written += len(body)
     return written
 
