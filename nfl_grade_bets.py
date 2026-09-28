@@ -33,8 +33,20 @@ PERFORMANCE_ALL_TAB = "Performance (All Lines)"
 
 PERFORMANCE_HEADER = [
     "Scope", "Bet Type", "Stars", "Bets", "Wins", "Losses", "Pushes",
-    "Win %", "Units Staked", "Units Result", "ROI %", "Avg CLV Line", "Avg CLV Price %",
+    "Win %", "Units Staked", "Units Result", "ROI %",
+    # "(pts)" is in the name deliberately: this column is an average LINE
+    # movement in points — half a point better than the close is 0.5 — not a
+    # percentage like its two neighbours. Without the unit it reads as one.
+    "Avg CLV Line (pts)", "Avg CLV Price %",
 ]
+
+# Columns H, K and M hold true percentages and are stored as FRACTIONS (0.473)
+# with a percent display format. Sheets' percent format multiplies by 100, so a
+# stored 47.3 would render as 4730%. Storing the fraction is also the honest
+# representation: the cell really is a percentage, so anything the owner builds
+# on top of it behaves.
+PERFORMANCE_PCT_COLS = ["Win %", "ROI %", "Avg CLV Price %"]
+PERFORMANCE_NUM_COLS = ["Units Staked", "Units Result", "Avg CLV Line (pts)"]
 
 
 def american_payout(price) -> float | None:
@@ -410,9 +422,9 @@ def rebuild_performance(gc) -> int:
             out.append([
                 f"Week {wk}", ", ".join(sorted(b["models"])), "",
                 decided + b["p"], b["w"], b["l"], b["p"],
-                round(b["w"] / decided * 100, 1) if decided else "",
+                round(b["w"] / decided, 4) if decided else "",
                 round(b["staked"], 2), round(b["res"], 3),
-                round(b["res"] / b["staked"] * 100, 1) if b["staked"] else "",
+                round(b["res"] / b["staked"], 4) if b["staked"] else "",
                 "", "",
             ])
         return out
@@ -445,13 +457,15 @@ def rebuild_performance(gc) -> int:
             n = decided + b["p"]
             out.append([
                 scope_name, bt_, stars, n, b["w"], b["l"], b["p"],
-                round(b["w"] / decided * 100, 1) if decided else "",
+                round(b["w"] / decided, 4) if decided else "",
                 round(b["staked"], 2), round(b["res"], 3),
-                round(b["res"] / b["staked"] * 100, 1) if b["staked"] else "",
+                round(b["res"] / b["staked"], 4) if b["staked"] else "",
                 # CLV is a per-bet RATE — average it, never sum it. Summing
                 # scales with bet count and means nothing.
                 round(sum(b["clv_l"]) / len(b["clv_l"]), 3) if b["clv_l"] else "",
-                round(sum(b["clv_p"]) / len(b["clv_p"]), 3) if b["clv_p"] else "",
+                # Stored in Bet History as percentage POINTS (0.72 = 0.72%), so
+                # /100 to make it the fraction a percent format expects.
+                round(sum(b["clv_p"]) / len(b["clv_p"]) / 100, 4) if b["clv_p"] else "",
             ])
         return out
 
@@ -502,11 +516,11 @@ def rebuild_performance(gc) -> int:
         return [
             "TOTAL", "all bet types above", "",
             int(bets), int(wins), int(losses), int(pushes),
-            round(wins / decided * 100, 1) if decided else "",
+            round(wins / decided, 4) if decided else "",
             round(staked, 2), round(res, 3),
-            round(res / staked * 100, 1) if staked else "",
+            round(res / staked, 4) if staked else "",
             round(sum(clv_l) / len(clv_l), 3) if clv_l else "",
-            round(sum(clv_p) / len(clv_p), 3) if clv_p else "",
+            round(sum(clv_p) / len(clv_p) / 100, 4) if clv_p else "",
         ]
 
     # TWO TABS, NOT TWO BLOCKS ON ONE TAB (2026-09-21). Both scopes used to be
@@ -560,10 +574,10 @@ def rebuild_performance(gc) -> int:
         # what you read is consistent. Units Staked is included with J-M
         # because the previous "0.####" pattern rendered a whole number as "6."
         # and it looked broken sitting next to the others.
-        tracking._pin_numeric_formats(
-            w, PERFORMANCE_HEADER,
-            ["Units Staked", "Units Result", "ROI %", "Avg CLV Line",
-             "Avg CLV Price %"], pattern="0.00")
+        tracking._pin_numeric_formats(w, PERFORMANCE_HEADER,
+                                      PERFORMANCE_NUM_COLS, pattern="0.00")
+        tracking._pin_numeric_formats(w, PERFORMANCE_HEADER,
+                                      PERFORMANCE_PCT_COLS, pattern="0.00%")
         written += len(body)
     return written
 
