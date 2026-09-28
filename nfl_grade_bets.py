@@ -366,6 +366,58 @@ def rebuild_performance(gc) -> int:
     graded = [r for r in all_graded if cohort(r) == tracking.CURRENT_MODEL]
     retired = [r for r in all_graded if cohort(r) != tracking.CURRENT_MODEL]
 
+    # ── Weekly ledger ────────────────────────────────────────────────────────
+    # Grouped by the game's NFL WEEK, taken from the schedule — not by entry
+    # date. A Week 3 game flagged on the Tuesday before it is still Week 3, and
+    # NFL weeks straddle Thursday to Monday, so date arithmetic gets the
+    # boundaries wrong (a Monday-night kickoff is already Tuesday in UTC).
+    #
+    # COVERS EVERY COHORT, unlike the by-type block below. This is a factual
+    # ledger of what was recorded each week, and scoping it to the current model
+    # would leave Weeks 1-2 blank when those results genuinely happened. The
+    # cohort that produced each week is named in the row so the two are never
+    # confused.
+    try:
+        s = nfl_data.import_schedules([2026])
+        week_of = {(r["home_team"], r["away_team"]): int(r["week"])
+                   for _, r in s[s["game_type"] == "REG"].iterrows()}
+    except Exception as e:
+        print(f"  [warn] weekly ledger unavailable ({e})")
+        week_of = {}
+
+    def weekly(subset):
+        buckets = {}
+        for r in subset:
+            home, away = _teams_from_label(r.get("Game", ""))
+            wk = week_of.get((home, away))
+            if wk is None:
+                continue
+            b = buckets.setdefault(wk, {"w": 0, "l": 0, "p": 0, "staked": 0.0,
+                                        "res": 0.0, "models": set()})
+            res = str(r.get("Result", ""))
+            b["w"] += res == "Win"
+            b["l"] += res == "Loss"
+            b["p"] += res == "Push"
+            # Void returns the stake: it is not a result, so it is left out of
+            # the W/L/P counts and contributes 0 units, same as a push.
+            if res in ("Win", "Loss"):
+                b["staked"] += tracking._num(r.get("Entry Units"), 0) or 0
+            b["res"] += tracking._num(r.get("Units Result"), 0) or 0
+            b["models"].add(cohort(r))
+        out = []
+        for wk in sorted(buckets):
+            b = buckets[wk]
+            decided = b["w"] + b["l"]
+            out.append([
+                f"Week {wk}", ", ".join(sorted(b["models"])), "",
+                decided + b["p"], b["w"], b["l"], b["p"],
+                round(b["w"] / decided * 100, 1) if decided else "",
+                round(b["staked"], 2), round(b["res"], 3),
+                round(b["res"] / b["staked"] * 100, 1) if b["staked"] else "",
+                "", "",
+            ])
+        return out
+
     def summarise(scope_name, subset):
         buckets = {}
         for r in subset:
@@ -449,20 +501,42 @@ def rebuild_performance(gc) -> int:
          "quote and its total must never be added to that one."),
     ):
         w = tracking._tab(gc, tab, PERFORMANCE_HEADER)
+        pad = [""] * (len(PERFORMANCE_HEADER) - 2)
         grid = [PERFORMANCE_HEADER,
                 total_line(scope, subset),
-                ["", note] + [""] * (len(PERFORMANCE_HEADER) - 2)]
+                ["", note] + pad]
         if retired_note:
-            grid.append(["", retired_note] + [""] * (len(PERFORMANCE_HEADER) - 2))
+            grid.append(["", retired_note] + pad)
+
+        # Weekly ledger, on the headline tab only (2026-09-28, owner request).
+        # It covers EVERY cohort, so it does not match the TOTAL banner above,
+        # which is current-model only — the section header says so rather than
+        # leaving the reader to discover it by subtraction.
+        if tab == PERFORMANCE_TAB:
+            wk_rows = weekly([r for r in all_graded
+                              if str(r.get("Is Primary", "")).upper() == "TRUE"])
+            if wk_rows:
+                grid.append(["", "BY WEEK — every model version, one bet per "
+                                 "opinion. A game's week comes from the schedule, "
+                                 "so a bet sits in the week it was PLAYED."] + pad)
+                grid += wk_rows
+                grid.append(["", "BY BET TYPE — current model only, so these rows "
+                                 "and the weekly rows above are two cuts of "
+                                 "different sets. Adding the units column down the "
+                                 "whole tab double-counts; the TOTAL row is the "
+                                 "figure to read."] + pad)
         grid += summarise(scope, subset)
         tracking.safe_rewrite(w, grid)          # never clear-then-write
-        # The stored numbers are exact, but this tab carried a leftover "0.0"
-        # display format, so every unit figure RENDERED to one decimal and
-        # adding up what you see came to -25.8 against a true -25.59. Sheets'
-        # own =SUM() was right the whole time; the eye was not. Pin the money
-        # columns so the display matches the banner.
-        tracking._pin_numeric_formats(w, PERFORMANCE_HEADER,
-                                      ["Units Staked", "Units Result"])
+        # FIXED 2 DECIMALS on every money/rate column (owner request 2026-09-28).
+        # The stored numbers keep full precision — only the display is pinned —
+        # so Sheets' own =SUM() still matches the TOTAL banner exactly while
+        # what you read is consistent. Units Staked is included with J-M
+        # because the previous "0.####" pattern rendered a whole number as "6."
+        # and it looked broken sitting next to the others.
+        tracking._pin_numeric_formats(
+            w, PERFORMANCE_HEADER,
+            ["Units Staked", "Units Result", "ROI %", "Avg CLV Line",
+             "Avg CLV Price %"], pattern="0.00")
         written += len(grid) - (4 if retired_note else 3)
     return written
 

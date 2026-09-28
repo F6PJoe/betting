@@ -327,7 +327,8 @@ def _tab(gc, name: str, header: list[str]):
     return w
 
 
-def _pin_numeric_formats(worksheet, header: list[str], cols: list[str]) -> None:
+def _pin_numeric_formats(worksheet, header: list[str], cols: list[str],
+                         pattern: str = "0.####") -> None:
     """
     Pin whole columns to plain number format. Must run on every write: inserted
     rows inherit neighbouring formats, so a column left unpinned drifts and then
@@ -343,7 +344,7 @@ def _pin_numeric_formats(worksheet, header: list[str], cols: list[str]) -> None:
                 "range": {"sheetId": worksheet.id, "startColumnIndex": idx,
                           "endColumnIndex": idx + 1, "startRowIndex": 1},
                 "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER",
-                                                               "pattern": "0.####"}}},
+                                                               "pattern": pattern}}},
                 "fields": "userEnteredFormat.numberFormat",
             }
         })
