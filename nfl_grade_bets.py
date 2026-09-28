@@ -394,6 +394,58 @@ def _highlight_total_row(worksheet, row_idx: int | None) -> None:
         print(f"  [warn] could not highlight the TOTAL row: {e}")
 
 
+def _conditional_fill(worksheet, scope: str) -> None:
+    """
+    Green when a bet type is up units, red when it is down.
+
+    REAL conditional-formatting rules rather than painted cells, because the
+    rows move: the weekly ledger above gains a row every week, so anything
+    baked in at a fixed position drifts (which is what happened to the owner's
+    manual yellow). A rule keyed on the row's own CONTENT follows the data
+    wherever it lands, and picks up next week's rows with no code change.
+
+    Keyed on the Scope column so it hits only the by-type block: weekly rows
+    read "Week 3" and the total reads "TOTAL", so neither matches and the
+    total keeps its yellow.
+
+    Existing rules are deleted first — addConditionalFormatRule appends, so
+    without that every rebuild would stack another identical pair.
+    """
+    ncols = len(PERFORMANCE_HEADER)
+    jcol = chr(ord("A") + PERFORMANCE_HEADER.index("Units Result"))
+    rng = {"sheetId": worksheet.id, "startRowIndex": 1,
+           "endRowIndex": worksheet.row_count,
+           "startColumnIndex": 0, "endColumnIndex": ncols}
+
+    try:
+        meta = worksheet.spreadsheet.fetch_sheet_metadata()
+        existing = 0
+        for s in meta.get("sheets", []):
+            if s["properties"]["sheetId"] == worksheet.id:
+                existing = len(s.get("conditionalFormats", []))
+                break
+        reqs = [{"deleteConditionalFormatRule": {"sheetId": worksheet.id, "index": i}}
+                for i in reversed(range(existing))]
+        # Sheets' own "light green 3" / "light red 3" — they sit beside the
+        # pure-yellow total without fighting it.
+        for formula, colour in (
+            (f'=AND($A2="{scope}",${jcol}2>0)',
+             {"red": 0.851, "green": 0.918, "blue": 0.827}),
+            (f'=AND($A2="{scope}",${jcol}2<0)',
+             {"red": 0.957, "green": 0.800, "blue": 0.800}),
+        ):
+            reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
+                "ranges": [rng],
+                "booleanRule": {
+                    "condition": {"type": "CUSTOM_FORMULA",
+                                  "values": [{"userEnteredValue": formula}]},
+                    "format": {"backgroundColor": colour},
+                }}}})
+        worksheet.spreadsheet.batch_update({"requests": reqs})
+    except Exception as e:
+        print(f"  [warn] could not set conditional formatting: {e}")
+
+
 def rebuild_performance(gc) -> int:
     """
     Rebuild the performance tabs from graded rows.
@@ -441,22 +493,23 @@ def rebuild_performance(gc) -> int:
         week_of = {}
 
     def weekly(subset):
-        # SPLIT BY WEEK *AND* MODEL, not week alone. Blending them hid that
-        # Week 3's +5.66 was mostly 12 bets from the retired model on the
-        # Thursday game, while the current model's own first outing was roughly
-        # flat. Dropping the old rows instead would blank Weeks 1-2 entirely —
-        # there are no current-model bets in them — and lose real history for
-        # no gain, since the headline record above already excludes them.
+        # ONE ROW PER WEEK (owner call 2026-09-28, after a split-by-model
+        # version read as two confusing "Week 3" rows). The cohorts that
+        # produced the week are named in the row instead.
+        #
+        # The cost of blending, recorded so it is not rediscovered: a week
+        # spanning a model change mixes them, and Week 3's +5.66 was mostly 12
+        # retired-model bets on the Thursday game (+4.87) while the current
+        # model's own share was +0.80. The yellow TOTAL row is current-model
+        # only, so that is where this model's record is read.
         buckets = {}
         for r in subset:
             home, away = _teams_from_label(r.get("Game", ""))
             wk = week_of.get((home, away))
             if wk is None:
                 continue
-            tag = ("current model" if cohort(r) == tracking.CURRENT_MODEL
-                   else "retired model")
-            b = buckets.setdefault((wk, tag), {"w": 0, "l": 0, "p": 0, "staked": 0.0,
-                                               "res": 0.0, "models": set()})
+            b = buckets.setdefault(wk, {"w": 0, "l": 0, "p": 0, "staked": 0.0,
+                                        "res": 0.0, "models": set()})
             res = str(r.get("Result", ""))
             b["w"] += res == "Win"
             b["l"] += res == "Loss"
@@ -468,12 +521,11 @@ def rebuild_performance(gc) -> int:
             b["res"] += tracking._num(r.get("Units Result"), 0) or 0
             b["models"].add(cohort(r))
         out = []
-        # current model first within each week — it is the one that matters now
-        for wk, tag in sorted(buckets, key=lambda k: (k[0], k[1] != "current model")):
-            b = buckets[(wk, tag)]
+        for wk in sorted(buckets):
+            b = buckets[wk]
             decided = b["w"] + b["l"]
             out.append([
-                f"Week {wk}", f"{tag} ({', '.join(sorted(b['models']))})", "",
+                f"Week {wk}", ", ".join(sorted(b["models"])), "",
                 decided + b["p"], b["w"], b["l"], b["p"],
                 round(b["w"] / decided, 4) if decided else "",
                 round(b["staked"], 2), round(b["res"], 3),
@@ -637,6 +689,7 @@ def rebuild_performance(gc) -> int:
         tracking._pin_numeric_formats(w, PERFORMANCE_HEADER,
                                       PERFORMANCE_PCT_COLS, pattern="0.00%")
         _highlight_total_row(w, total_at)
+        _conditional_fill(w, scope)
         written += len(body)
     return written
 
