@@ -39,7 +39,23 @@ import nfl_data_py as nfl
 
 SEASON = 2026
 DST_ENDS = dt.date(2026, 11, 1)          # EDT (UTC-4) before, EST (UTC-5) after
-LEADS = [230, 200, 170, 155, 140, 125, 110, 95, 80, 65, 50, 35, 20]
+# LEADS, in minutes before kickoff. Consecutive gaps must stay <= 60 or a lag
+# value can slip BETWEEN two firings and miss the window entirely.
+#
+# A firing scheduled at lead l lands at (l - lag) minutes before kickoff, so it
+# lands inside the final 60 minutes exactly when lag is in [l-60, l). Union
+# those intervals across the leads below and the safe range is a continuous
+# 0..350 minutes — i.e. any lag up to 350 is guaranteed to put at least one
+# firing inside the hour before kickoff.
+#
+# WHY IT REACHES 350: measured over 100 real scheduled runs of this workflow,
+# lag was median 61, 90th pct 166, 95th pct 197, max 243. A 230-minute ceiling
+# left about 1% of firings outside it. The danger is not one slow run but
+# CORRELATED delay — when GitHub's scheduler is congested every cron in the
+# window is late together, so the per-run 1% is not the per-game risk. The
+# early leads cost almost nothing (they land far from kickoff, so they are
+# cheap lines-only firings) and they buy the tail.
+LEADS = [350, 320, 290, 260, 230, 200, 170, 155, 140, 125, 110, 95, 80, 65, 50, 35, 20]
 BAD_MINUTES = {0, 30}
 PY2CRON = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 0}   # python Mon=0 -> cron Mon=1
 
