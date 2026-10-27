@@ -117,8 +117,20 @@ jobs:
       # --only-if-kickoff-within 6 exits free when nothing kicks off soon: the
       # crons are day-of-week based, so without it every Sunday and Monday fires
       # in bye weeks and the off-season (Sun Sep 6 alone: 18 fires, zero games).
-      - name: Snapshot lines (no props)
+      # --props-if-kickoff-within 100 (MINUTES) refreshes player props on the
+      # firings that land inside the final ~100 minutes, so a prop's closing
+      # line is a real one. Without it --lines-only carried the MORNING prop
+      # prices forward under a fresh timestamp, and prop CLV was comparing a
+      # morning line against another morning line — it never saw the T-90
+      # inactive report, which is the biggest mover of a player's line.
+      #
+      # 100 minutes, not hours: each pass costs 7 x remaining games, and there
+      # are 6-9 firings per kickoff window. A tight band means only the two or
+      # three that land inside it pay for props (~1,200 credits/month), while
+      # the earlier firings stay on the cheap lines-only path.
+      - name: Snapshot lines (props inside the final 100 min)
         run: python nfl_fetch_odds.py --lines-only --only-if-kickoff-within 6
+                                      --props-if-kickoff-within 100
 
       # --snapshot-only writes the Line Log (what closing-line capture reads to
       # find "the last snapshot strictly before kickoff") and captures closing

@@ -259,10 +259,18 @@ def main():
     # The check itself is FREE: kickoff times come from the nflverse schedule,
     # not the Odds API, so nothing is spent deciding not to spend.
     within = None
+    props_within_min = None
     for i, a in enumerate(sys.argv):
         if a == "--only-if-kickoff-within" and i + 1 < len(sys.argv):
             within = float(sys.argv[i + 1])
-    if within is not None:
+        # --props-if-kickoff-within N (MINUTES): fetch props even in
+        # --lines-only mode once kickoff is this close. See the block below the
+        # guard for why this exists.
+        if a == "--props-if-kickoff-within" and i + 1 < len(sys.argv):
+            props_within_min = float(sys.argv[i + 1])
+
+    mins_to_kick = None
+    if within is not None or props_within_min is not None:
         import nfl_data_py as _nfl
         sched = _nfl.import_schedules([2026])
         sched = sched[sched["game_type"] == "REG"]
@@ -278,11 +286,39 @@ def main():
         if soonest is None:
             print("No upcoming scheduled games — nothing to snapshot.")
             return
-        hrs = (soonest - now).total_seconds() / 3600
-        if hrs > within:
-            print(f"Next kickoff is {hrs:.1f}h away (> {within}h) — skipping, 0 credits spent.")
+        mins_to_kick = (soonest - now).total_seconds() / 60
+        if within is not None and mins_to_kick / 60 > within:
+            print(f"Next kickoff is {mins_to_kick/60:.1f}h away (> {within}h) — "
+                  f"skipping, 0 credits spent.")
             return
-        print(f"Next kickoff {hrs:.1f}h away — proceeding.")
+        print(f"Next kickoff {mins_to_kick:.0f} min away — proceeding.")
+
+    # PROP CLOSING LINES (2026-10-27). --lines-only skips the per-event call to
+    # stay cheap, and the write carries the morning's prop rows forward so the
+    # tab is never left propless. That keeps coverage, but it means a prop's
+    # "closing" price is the MORNING price wearing a fresh timestamp — measured
+    # on DEN@KC, a price sat unchanged from T-1982min to T-425min and changed
+    # only when the next morning fetch ran. So prop CLV on ~1,470 graded bets
+    # was comparing a morning line against another morning line.
+    #
+    # That matters more for props than for game lines: NFL inactives drop at
+    # T-90 and a scratched teammate moves a receiving-yards line hard. The whole
+    # point of measuring CLV is to know whether we are beating the number the
+    # market settles on, and we were not measuring that at all.
+    #
+    # Scoped by MINUTES, not hours, deliberately. Credits are not scarce (2,211
+    # of 20,000 used in October) but they are not free either: each pass costs
+    # 7 x remaining games, so a wide window would re-fetch every game on every
+    # one of the 6-9 firings per kickoff window. A tight band means only the
+    # two or three firings that land inside it pay, which is ~1,200/month.
+    if lines_only and props_within_min is not None and mins_to_kick is not None:
+        if mins_to_kick <= props_within_min:
+            lines_only = False
+            print(f"  Within {props_within_min:.0f} min of kickoff — fetching PROPS "
+                  f"too, so the closing line is a real one")
+        else:
+            print(f"  {mins_to_kick:.0f} min to kickoff (> {props_within_min:.0f}) — "
+                  f"lines only, props carried forward")
 
     last_hdrs = {}
 
