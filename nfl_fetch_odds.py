@@ -22,12 +22,28 @@ ODDS_API_KEY   = os.environ.get("ODDS_API_KEY") or os.environ["ODDS_API_KEY_NFL"
 NFL_SHEET_ID   = "1UPempH9iWF-DQFh5d26zjpft3-XLehp30PZPfE0tpsE"
 CREDS_FILE     = os.path.join(os.path.dirname(__file__), "google_credentials.json")
 
-BOOKS_TO_KEEP  = {"fanduel", "draftkings", "betmgm", "betrivers"}
+# The books the owner actually bets at. ESPN Bet added 2026-10-27 on their say-so.
+#
+# ASKED FOR BY NAME, NOT TAKEN WHOLESALE. A us2 test found 10 extra books and
+# better prices on 23.5% of markets (mean +0.58pp of implied probability), but
+# several are state-specific (hardrockbet_fl/_oh) or small (fliff, rebet,
+# courtside). A better price at a book you cannot bet is not a better price —
+# it is an inflated edge, and every star rating downstream would drift up with
+# it. So the list is exactly what can be acted on.
+#
+# Fanatics was already in the `us` region and is deliberately NOT here: it has
+# never once supplied a best price across 192k Line Log rows.
+BOOKS_TO_KEEP  = {"fanduel", "draftkings", "betmgm", "betrivers", "espnbet"}
 BASE_URL       = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds"
 EVENT_URL      = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events/{event_id}/odds"
+# REQUEST THE BOOKS BY NAME rather than a region. The API prices `bookmakers`
+# at one region per five books, so these five cost exactly what `regions=us`
+# cost — while `regions=us,us2` would have DOUBLED it to reach espnbet, and
+# `us` alone could not reach it at all. It also stops us paying for the seven
+# `us` books we fetched and discarded on every call.
 COMMON_PARAMS  = {
     "apiKey":      ODDS_API_KEY,
-    "regions":     "us",
+    "bookmakers":  ",".join(sorted(BOOKS_TO_KEEP)),
     "oddsFormat":  "american",
     "dateFormat":  "iso",
 }

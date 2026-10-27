@@ -1,7 +1,6 @@
 name: NFL Line Snapshots (CLV)
 
 # INSTRUMENTATION ONLY — captures closing lines for CLV. No analysis, no picks.
-# Uses --lines-only (~19 credits) instead of the morning run's ~149 with props.
 #
 # WHY THE TIMES LOOK ODD
 # ----------------------
@@ -10,81 +9,238 @@ name: NFL Line Snapshots (CLV)
 # a QB scratch is worth points, not cents. So a snapshot has to land inside
 # [kickoff-90min, kickoff].
 #
-# But GitHub Actions cron fires 29-57 MINUTES LATE (measured on this repo:
-# 08:00->08:44, 08:00->08:47, 18:30->18:59, 12:30->13:27). Aiming a single cron
-# at T-90 can therefore land after kickoff. The answer is DENSITY, not better
-# aim: several crons per kickoff window so at least one lands inside it.
+# But GitHub Actions cron fires LATE (measured here: median 54 min, max 302).
+# Aiming a single cron at T-90 can therefore land after kickoff. The answer is
+# DENSITY, not better aim.
 #
-# DAYLIGHT SAVING: cron is UTC and the NFL season crosses the DST change
-# (1 Nov 2026). A 1:00 PM ET kickoff is 17:00 UTC in EDT but 18:00 UTC in EST.
-# The windows below are deliberately widened to cover BOTH, which costs a few
-# extra 19-credit snapshots rather than risking a missed close.
-# >>> REVIEW THESE TIMES IN EARLY NOVEMBER once EST is in effect. <<<
+# COST: a lines-only firing is ~3 credits, so density is nearly free. Firings
+# inside the final 60 minutes also refresh PROPS (7 x remaining games), because
+# otherwise a prop's "closing" price is the morning price carried forward — see
+# --props-if-kickoff-within in nfl_fetch_odds.py. Budgeted ~2,800/month against
+# a 20,000 plan with MLB finished.
+#
+# DAYLIGHT SAVING is handled by GENERATING the grid from the real schedule in
+# the correct offset (scratchpad/gen_crons.py), not by widening windows to
+# straddle both. The 2026 season crosses the 1 Nov change and the previous
+# EDT-built grid would have fired an hour early on every remaining game.
 #
 # Games that have already kicked off are skipped by the fetcher, and empty
 # responses are free, so out-of-window firings cost little.
 
 on:
   schedule:
-  # SNAPSHOT PLACEMENT — rebuilt 2026-09-03 from MEASURED lag, not assumption.
+  # REBUILT 2026-10-27 for EASTERN STANDARD TIME and much higher density.
   #
-  # GitHub Actions cron does not fire on time. Measured across real fires:
-  #   snapshot workflow  median 54m late, MAX 302m
-  #   morning workflow   median 258m late
-  # A cron aimed exactly at T-90 can therefore land after kickoff, which would
-  # capture a closing line from BEFORE the inactive report and quietly make
-  # every CLV number for that game wrong.
+  # WHY IT HAD TO BE REBUILT NOW: the grid was generated for EDT, and the
+  # clocks go back on 1 Nov. Every kickoff moves an hour later in UTC — the
+  # Sunday afternoon slate alone (93 remaining games) goes 17:00 -> 18:00 UTC —
+  # so the old crons would have fired an hour early on everything and coverage
+  # would have collapsed. Generated directly from the remaining schedule, so
+  # the Thanksgiving, Black Friday, Saturday and Christmas slots are included
+  # rather than remembered.
   #
-  # Two mitigations, both applied below:
-  #  1. NOTHING ON :00 OR :30. Every previous cron sat on one of those slots —
-  #     the most contested minutes on GitHub's scheduler, since that is where
-  #     everyone points theirs. The 302m outliers all came from them.
-  #  2. DENSITY, NOT PRECISION. Six crons per kickoff window spanning T-150 to
-  #     T-25. At the median 54m lag those land ~T-96 through ~T+29, so several
-  #     fall inside the T-90-to-kickoff window even when individual fires drift.
+  # PLACEMENT: GitHub cron fires LATE (measured here: median 54 min, max 302),
+  # so a cron at T-x lands near T-(x-54). Leads run T-230..T-20 per window,
+  # which puts the median landing zone across T-176..T+34 and guarantees
+  # several inside T-90..T-0 — the window that matters, because inactives drop
+  # at T-90 and that is the line worth measuring CLV against.
   #
-  # capture_closing_and_clv() takes the LAST snapshot strictly before kickoff,
-  # so extra fires are free accuracy — the only failure mode is having none.
+  # Simulated against all 165 remaining games: 100% get a snapshot inside 90
+  # minutes at 0, 54 and 150 minutes of lag, and 90% even at 250.
   #
-  # NOTE: new cron schedules take a cycle (~12h) to register with GitHub.
-    - cron: '37 14 * * 0'   # Sun 14:37Z  ~T-150 for Sun 1:00pm ET
-    - cron: '55 14 * * 0'   # Sun 14:55Z  ~T-125 for Sun 1:00pm ET
-    - cron: '20 15 * * 0'   # Sun 15:20Z  ~T-100 for Sun 1:00pm ET
-    - cron: '45 15 * * 0'   # Sun 15:45Z  ~T-75 for Sun 1:00pm ET
-    - cron: '10 16 * * 0'   # Sun 16:10Z  ~T-50 for Sun 1:00pm ET
-    - cron: '35 16 * * 0'   # Sun 16:35Z  ~T-25 for Sun 1:00pm ET
-    - cron: '55 17 * * 0'   # Sun 17:55Z  ~T-150 for Sun 4:25pm ET
-    - cron: '20 18 * * 0'   # Sun 18:20Z  ~T-125 for Sun 4:25pm ET
-    - cron: '45 18 * * 0'   # Sun 18:45Z  ~T-100 for Sun 4:25pm ET
-    - cron: '10 19 * * 0'   # Sun 19:10Z  ~T-75 for Sun 4:25pm ET
-    - cron: '35 19 * * 0'   # Sun 19:35Z  ~T-50 for Sun 4:25pm ET
-    - cron: '7 20 * * 0'   # Sun 20:07Z  ~T-25 for Sun 4:25pm ET
-    - cron: '50 21 * * 0'   # Sun 21:50Z  ~T-150 for Sun 8:20pm ET
-    - cron: '15 22 * * 0'   # Sun 22:15Z  ~T-125 for Sun 8:20pm ET
-    - cron: '40 22 * * 0'   # Sun 22:40Z  ~T-100 for Sun 8:20pm ET
-    - cron: '5 23 * * 0'   # Sun 23:05Z  ~T-75 for Sun 8:20pm ET
-    - cron: '37 23 * * 0'   # Sun 23:37Z  ~T-50 for Sun 8:20pm ET
-    - cron: '55 23 * * 0'   # Sun 23:55Z  ~T-25 for Sun 8:20pm ET
-    - cron: '45 21 * * 1'   # Mon 21:45Z  ~T-150 for Mon 8:15pm ET
-    - cron: '10 22 * * 1'   # Mon 22:10Z  ~T-125 for Mon 8:15pm ET
-    - cron: '35 22 * * 1'   # Mon 22:35Z  ~T-100 for Mon 8:15pm ET
-    - cron: '7 23 * * 1'   # Mon 23:07Z  ~T-75 for Mon 8:15pm ET
-    - cron: '25 23 * * 1'   # Mon 23:25Z  ~T-50 for Mon 8:15pm ET
-    - cron: '50 23 * * 1'   # Mon 23:50Z  ~T-25 for Mon 8:15pm ET
-    - cron: '50 21 * * 3'   # Wed 21:50Z  ~T-150 for Wed 8:20pm ET
-    - cron: '15 22 * * 3'   # Wed 22:15Z  ~T-125 for Wed 8:20pm ET
-    - cron: '40 22 * * 3'   # Wed 22:40Z  ~T-100 for Wed 8:20pm ET
-    - cron: '5 23 * * 3'   # Wed 23:05Z  ~T-75 for Wed 8:20pm ET
-    - cron: '37 23 * * 3'   # Wed 23:37Z  ~T-50 for Wed 8:20pm ET
-    - cron: '55 23 * * 3'   # Wed 23:55Z  ~T-25 for Wed 8:20pm ET
-    - cron: '45 21 * * 4'   # Thu 21:45Z  ~T-150 for Thu 8:15pm ET
-    - cron: '10 22 * * 4'   # Thu 22:10Z  ~T-125 for Thu 8:15pm ET
-    - cron: '35 22 * * 4'   # Thu 22:35Z  ~T-100 for Thu 8:15pm ET
-    - cron: '7 23 * * 4'   # Thu 23:07Z  ~T-75 for Thu 8:15pm ET
-    - cron: '25 23 * * 4'   # Thu 23:25Z  ~T-50 for Thu 8:15pm ET
-    - cron: '50 23 * * 4'   # Thu 23:50Z  ~T-25 for Thu 8:15pm ET
+  # NOTHING ON :00 OR :30 — measured, every worst-case delay came from those
+  # slots. The generator shifts any that land there.
+  #
+  # Regenerate with scratchpad/gen_crons.py if the schedule gains slots.
+    - cron: '3 0 * * 0'
+    - cron: '15 0 * * 0'
+    - cron: '33 0 * * 0'
+    - cron: '45 0 * * 0'
+    - cron: '3 1 * * 0'
+    - cron: '40 10 * * 0'
+    - cron: '10 11 * * 0'
+    - cron: '40 11 * * 0'
+    - cron: '55 11 * * 0'
+    - cron: '10 12 * * 0'
+    - cron: '25 12 * * 0'
+    - cron: '40 12 * * 0'
+    - cron: '55 12 * * 0'
+    - cron: '10 13 * * 0'
+    - cron: '25 13 * * 0'
+    - cron: '40 13 * * 0'
+    - cron: '55 13 * * 0'
+    - cron: '10 14 * * 0'
+    - cron: '40 14 * * 0'
+    - cron: '10 15 * * 0'
+    - cron: '25 15 * * 0'
+    - cron: '40 15 * * 0'
+    - cron: '55 15 * * 0'
+    - cron: '10 16 * * 0'
+    - cron: '25 16 * * 0'
+    - cron: '40 16 * * 0'
+    - cron: '55 16 * * 0'
+    - cron: '10 17 * * 0'
+    - cron: '15 17 * * 0'
+    - cron: '25 17 * * 0'
+    - cron: '40 17 * * 0'
+    - cron: '45 17 * * 0'
+    - cron: '15 18 * * 0'
+    - cron: '33 18 * * 0'
+    - cron: '45 18 * * 0'
+    - cron: '3 19 * * 0'
+    - cron: '15 19 * * 0'
+    - cron: '33 19 * * 0'
+    - cron: '45 19 * * 0'
+    - cron: '3 20 * * 0'
+    - cron: '15 20 * * 0'
+    - cron: '33 20 * * 0'
+    - cron: '45 20 * * 0'
+    - cron: '33 21 * * 0'
+    - cron: '3 22 * * 0'
+    - cron: '33 22 * * 0'
+    - cron: '45 22 * * 0'
+    - cron: '3 23 * * 0'
+    - cron: '15 23 * * 0'
+    - cron: '33 23 * * 0'
+    - cron: '45 23 * * 0'
+    - cron: '3 0 * * 1'
+    - cron: '15 0 * * 1'
+    - cron: '33 0 * * 1'
+    - cron: '45 0 * * 1'
+    - cron: '3 1 * * 1'
+    - cron: '25 21 * * 1'
+    - cron: '55 21 * * 1'
+    - cron: '25 22 * * 1'
+    - cron: '40 22 * * 1'
+    - cron: '55 22 * * 1'
+    - cron: '10 23 * * 1'
+    - cron: '25 23 * * 1'
+    - cron: '40 23 * * 1'
+    - cron: '55 23 * * 1'
+    - cron: '10 0 * * 2'
+    - cron: '25 0 * * 2'
+    - cron: '40 0 * * 2'
+    - cron: '55 0 * * 2'
+    - cron: '10 21 * * 3'
+    - cron: '40 21 * * 3'
+    - cron: '10 22 * * 3'
+    - cron: '25 22 * * 3'
+    - cron: '40 22 * * 3'
+    - cron: '55 22 * * 3'
+    - cron: '10 23 * * 3'
+    - cron: '25 23 * * 3'
+    - cron: '40 23 * * 3'
+    - cron: '55 23 * * 3'
+    - cron: '10 0 * * 4'
+    - cron: '25 0 * * 4'
+    - cron: '40 0 * * 4'
+    - cron: '10 14 * * 4'
+    - cron: '40 14 * * 4'
+    - cron: '10 15 * * 4'
+    - cron: '25 15 * * 4'
+    - cron: '40 15 * * 4'
+    - cron: '55 15 * * 4'
+    - cron: '10 16 * * 4'
+    - cron: '25 16 * * 4'
+    - cron: '40 16 * * 4'
+    - cron: '55 16 * * 4'
+    - cron: '10 17 * * 4'
+    - cron: '25 17 * * 4'
+    - cron: '40 17 * * 4'
+    - cron: '10 18 * * 4'
+    - cron: '40 18 * * 4'
+    - cron: '55 18 * * 4'
+    - cron: '10 19 * * 4'
+    - cron: '25 19 * * 4'
+    - cron: '40 19 * * 4'
+    - cron: '55 19 * * 4'
+    - cron: '10 20 * * 4'
+    - cron: '25 20 * * 4'
+    - cron: '40 20 * * 4'
+    - cron: '55 20 * * 4'
+    - cron: '10 21 * * 4'
+    - cron: '25 21 * * 4'
+    - cron: '40 21 * * 4'
+    - cron: '55 21 * * 4'
+    - cron: '10 22 * * 4'
+    - cron: '25 22 * * 4'
+    - cron: '40 22 * * 4'
+    - cron: '55 22 * * 4'
+    - cron: '10 23 * * 4'
+    - cron: '25 23 * * 4'
+    - cron: '40 23 * * 4'
+    - cron: '55 23 * * 4'
+    - cron: '10 0 * * 5'
+    - cron: '25 0 * * 5'
+    - cron: '40 0 * * 5'
+    - cron: '55 0 * * 5'
+    - cron: '10 14 * * 5'
+    - cron: '40 14 * * 5'
+    - cron: '10 15 * * 5'
+    - cron: '25 15 * * 5'
+    - cron: '40 15 * * 5'
+    - cron: '55 15 * * 5'
+    - cron: '10 16 * * 5'
+    - cron: '25 16 * * 5'
+    - cron: '40 16 * * 5'
+    - cron: '55 16 * * 5'
+    - cron: '10 17 * * 5'
+    - cron: '25 17 * * 5'
+    - cron: '40 17 * * 5'
+    - cron: '55 17 * * 5'
+    - cron: '10 18 * * 5'
+    - cron: '25 18 * * 5'
+    - cron: '40 18 * * 5'
+    - cron: '55 18 * * 5'
+    - cron: '10 19 * * 5'
+    - cron: '25 19 * * 5'
+    - cron: '40 19 * * 5'
+    - cron: '55 19 * * 5'
+    - cron: '10 20 * * 5'
+    - cron: '25 20 * * 5'
+    - cron: '40 20 * * 5'
+    - cron: '55 20 * * 5'
+    - cron: '10 21 * * 5'
+    - cron: '25 21 * * 5'
+    - cron: '55 21 * * 5'
+    - cron: '25 22 * * 5'
+    - cron: '40 22 * * 5'
+    - cron: '55 22 * * 5'
+    - cron: '10 23 * * 5'
+    - cron: '25 23 * * 5'
+    - cron: '40 23 * * 5'
+    - cron: '55 23 * * 5'
+    - cron: '10 0 * * 6'
+    - cron: '25 0 * * 6'
+    - cron: '40 0 * * 6'
+    - cron: '55 0 * * 6'
+    - cron: '10 18 * * 6'
+    - cron: '40 18 * * 6'
+    - cron: '10 19 * * 6'
+    - cron: '25 19 * * 6'
+    - cron: '40 19 * * 6'
+    - cron: '55 19 * * 6'
+    - cron: '10 20 * * 6'
+    - cron: '25 20 * * 6'
+    - cron: '40 20 * * 6'
+    - cron: '55 20 * * 6'
+    - cron: '10 21 * * 6'
+    - cron: '25 21 * * 6'
+    - cron: '33 21 * * 6'
+    - cron: '40 21 * * 6'
+    - cron: '3 22 * * 6'
+    - cron: '33 22 * * 6'
+    - cron: '45 22 * * 6'
+    - cron: '3 23 * * 6'
+    - cron: '15 23 * * 6'
+    - cron: '33 23 * * 6'
+    - cron: '45 23 * * 6'
 
   workflow_dispatch:
+
+concurrency:
+  group: nfl-line-snapshots
+  cancel-in-progress: false
 
 env:
   TZ: America/New_York
@@ -117,20 +273,20 @@ jobs:
       # --only-if-kickoff-within 6 exits free when nothing kicks off soon: the
       # crons are day-of-week based, so without it every Sunday and Monday fires
       # in bye weeks and the off-season (Sun Sep 6 alone: 18 fires, zero games).
-      # --props-if-kickoff-within 100 (MINUTES) refreshes player props on the
-      # firings that land inside the final ~100 minutes, so a prop's closing
+      # --props-if-kickoff-within 60 (MINUTES) refreshes player props on the
+      # firings that land inside the final ~60 minutes, so a prop's closing
       # line is a real one. Without it --lines-only carried the MORNING prop
       # prices forward under a fresh timestamp, and prop CLV was comparing a
       # morning line against another morning line — it never saw the T-90
       # inactive report, which is the biggest mover of a player's line.
       #
-      # 100 minutes, not hours: each pass costs 7 x remaining games, and there
+      # 60 minutes, not hours: each pass costs 7 x remaining games, and there
       # are 6-9 firings per kickoff window. A tight band means only the two or
       # three that land inside it pay for props (~1,200 credits/month), while
       # the earlier firings stay on the cheap lines-only path.
-      - name: Snapshot lines (props inside the final 100 min)
+      - name: Snapshot lines (props inside the final 60 min)
         run: python nfl_fetch_odds.py --lines-only --only-if-kickoff-within 6
-                                      --props-if-kickoff-within 100
+                                      --props-if-kickoff-within 60
 
       # --snapshot-only writes the Line Log (what closing-line capture reads to
       # find "the last snapshot strictly before kickoff") and captures closing
